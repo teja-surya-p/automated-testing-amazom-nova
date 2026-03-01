@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8787";
@@ -65,17 +65,95 @@ function incidentFromSession(session) {
 }
 
 function thoughtFromPayload(payload) {
+  const timestamp = payload.timestamp ?? new Date().toISOString();
+
   return {
     id: crypto.randomUUID(),
     sessionId: payload.sessionId,
     step: payload.step,
+    phase: payload.phase ?? "before-action",
     status: payload.status,
-    action: payload.action ?? "Reviewing current state",
-    reasoning: payload.reasoning ?? "No reasoning provided.",
-    confidenceScore: Number(payload.confidenceScore ?? 0),
+    ghost: false,
+    title: payload.title ?? payload.stepTitle ?? payload.action ?? "Reviewing current state",
+    action: payload.action ?? payload.title ?? "Reviewing current state",
+    details: payload.details ?? payload.reasoning ?? "No reasoning provided.",
+    reasoning: payload.reasoning ?? payload.details ?? "No reasoning provided.",
+    confidence: Number(payload.confidence ?? payload.confidenceScore ?? 0),
+    confidenceScore: Number(payload.confidence ?? payload.confidenceScore ?? 0),
     raw: payload.raw ?? "{}",
-    at: new Date().toLocaleTimeString()
+    timestamp,
+    at: new Date(timestamp).toLocaleTimeString()
   };
+}
+
+function getThoughtOutcome(log) {
+  if (log.ghost) {
+    return {
+      label: "In Progress",
+      detail: "Success: Pending",
+      tone: "border-cyan-300/20 bg-cyan-400/10 text-cyan-100"
+    };
+  }
+
+  if (log.status === "success") {
+    return {
+      label: "Success",
+      detail: "Success: Yes",
+      tone: "border-emerald-300/20 bg-emerald-400/10 text-emerald-100"
+    };
+  }
+
+  if (log.status === "bug") {
+    return {
+      label: "Failed",
+      detail: "Success: No",
+      tone: "border-rose-300/20 bg-rose-400/10 text-rose-100"
+    };
+  }
+
+  if (log.status === "recoverable") {
+    return {
+      label: "Blocked",
+      detail: "Success: No",
+      tone: "border-amber-300/20 bg-amber-400/10 text-amber-100"
+    };
+  }
+
+  return {
+    label: "Continuing",
+    detail: "Success: No",
+    tone: "border-slate-300/15 bg-white/[0.04] text-slate-200"
+  };
+}
+
+function ghostThoughtFromPayload(payload) {
+  const timestamp = payload.timestamp ?? new Date().toISOString();
+
+  return {
+    id: crypto.randomUUID(),
+    sessionId: payload.sessionId,
+    step: payload.step,
+    phase: payload.phase ?? "before-action",
+    status: payload.status ?? "thinking",
+    ghost: true,
+    title: payload.title ?? "Analyzing current view...",
+    action: payload.action ?? "Analyzing current view...",
+    details: payload.details ?? "Nova Auditor is processing the current screenshot.",
+    reasoning: payload.details ?? "Nova Auditor is processing the current screenshot.",
+    confidence: null,
+    confidenceScore: null,
+    raw: null,
+    timestamp,
+    at: new Date(timestamp).toLocaleTimeString()
+  };
+}
+
+function isSameThoughtMove(entry, payload) {
+  return (
+    entry.sessionId === payload.sessionId &&
+    entry.step === payload.step &&
+    (entry.phase ?? "before-action") === (payload.phase ?? "before-action")
+  );
 }
 
 function selectPreferredSession(sessions) {
@@ -104,80 +182,177 @@ function StatusPill({ status }) {
   );
 }
 
-function PanelShell({ title, accent, children, headerSlot = null }) {
+function HighlightOverlay({ highlight }) {
+  if (!highlight) {
+    return null;
+  }
+
+  const toneClasses =
+    highlight.tone === "rose"
+      ? "border-rose-300/90 shadow-[0_0_45px_rgba(251,113,133,0.45)]"
+      : highlight.tone === "amber"
+        ? "border-amber-300/90 shadow-[0_0_45px_rgba(251,191,36,0.4)]"
+        : highlight.tone === "violet"
+          ? "border-violet-300/90 shadow-[0_0_45px_rgba(196,181,253,0.45)]"
+          : "border-cyan-300/90 shadow-[0_0_45px_rgba(103,232,249,0.45)]";
+
   return (
-    <section className="flex min-h-0 flex-col rounded-3xl border border-white/10 bg-slate-900/80 shadow-panel backdrop-blur">
-      <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-        <div>
-          <p className={`text-[11px] font-semibold uppercase tracking-[0.32em] ${accent}`}>{title}</p>
-        </div>
+    <div className="pointer-events-none absolute inset-0 z-20">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.92 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.22 }}
+        className={`absolute rounded-full border-2 bg-white/[0.02] ${toneClasses}`}
+        style={{
+          left: `${highlight.xPct}%`,
+          top: `${highlight.yPct}%`,
+          width: `${highlight.widthPct}%`,
+          height: `${highlight.heightPct}%`
+        }}
+      >
+        <div className="absolute inset-[-12px] rounded-full border border-white/15 animate-pulse" />
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18, delay: 0.08 }}
+        className="absolute rounded-full border border-white/15 bg-slate-950/90 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.24em] text-white shadow-panel"
+        style={{
+          left: `${Math.min(highlight.xPct + 1, 78)}%`,
+          top: `${Math.max(highlight.yPct - 4, 2)}%`
+        }}
+      >
+        {highlight.label}
+      </motion.div>
+    </div>
+  );
+}
+
+function RailTabs({ tab, setTab }) {
+  return (
+    <div className="flex rounded-2xl border border-white/10 bg-slate-900/80 p-1 xl:hidden">
+      {[
+        ["thoughts", "Thought Stream"],
+        ["incidents", "Incident Archive"]
+      ].map(([value, label]) => (
+        <button
+          key={value}
+          type="button"
+          onClick={() => setTab(value)}
+          className={`flex-1 rounded-xl px-3 py-2 text-xs font-semibold uppercase tracking-[0.24em] transition ${
+            tab === value
+              ? "bg-cyan-400/10 text-cyan-200"
+              : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PanelShell({ title, accent, children, headerSlot = null, className = "", bodyClassName = "" }) {
+  return (
+    <section
+      className={`flex min-h-0 flex-col rounded-3xl border border-white/10 bg-slate-900/80 shadow-panel backdrop-blur ${className}`}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-4 sm:px-5">
+        <p className={`text-[11px] font-semibold uppercase tracking-[0.32em] ${accent}`}>{title}</p>
         {headerSlot}
       </div>
-      <div className="min-h-0 flex-1 p-5">{children}</div>
+      <div className={`min-h-0 flex-1 p-4 sm:p-5 ${bodyClassName}`}>{children}</div>
     </section>
   );
 }
 
-function LiveFeedPanel({ screenshot, session, latestThought }) {
+function LiveFeedPanel({ screenshot, session, latestThought, highlight }) {
+  const liveUrl = session?.currentUrl ?? session?.startUrl ?? null;
+
   return (
     <PanelShell
       title="Live Observer (Nova Act)"
       accent="text-cyan-300"
       headerSlot={<StatusPill status={session?.status} />}
+      className="min-h-[28rem]"
     >
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="grid gap-3 rounded-2xl border border-cyan-400/20 bg-slate-950/70 p-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <div>
-            <h2 className="text-xl font-semibold text-white">{session?.goal ?? "Awaiting mission objective"}</h2>
-            <p className="mt-2 text-sm text-slate-400">
+            <h2 className="max-w-xl text-2xl font-semibold leading-tight text-white sm:text-3xl">
+              {session?.goal ?? "Awaiting mission objective"}
+            </h2>
+            <p className="mt-3 break-all text-sm text-slate-400">
               {session?.currentUrl ?? "Launch a run to stream the agent browser here in real time."}
             </p>
           </div>
           <div className="grid gap-3 text-xs uppercase tracking-[0.2em] text-slate-400">
             <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
               <span className="block text-[10px] text-slate-500">Session</span>
-              <strong className="mt-2 block font-mono text-sm text-slate-100">{session?.id ?? "unbound"}</strong>
+              <strong className="mt-2 block break-all font-mono text-sm text-slate-100">
+                {session?.id ?? "unbound"}
+              </strong>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
               <span className="block text-[10px] text-slate-500">Auditor Action</span>
               <strong className="mt-2 block text-sm normal-case tracking-normal text-slate-100">
-                {latestThought?.action ?? "Monitoring"}
+                {latestThought?.title ?? latestThought?.action ?? "Monitoring"}
               </strong>
             </div>
           </div>
         </div>
 
-        <div className="relative min-h-[26rem] flex-1 overflow-hidden rounded-[1.6rem] border border-white/10 bg-slate-950">
+        <div className="relative overflow-hidden rounded-[1.6rem] border border-white/10 bg-slate-950">
           <div className="absolute inset-0 animate-pulse-grid bg-[linear-gradient(rgba(34,211,238,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(34,211,238,0.06)_1px,transparent_1px)] bg-[size:34px_34px]" />
-          {screenshot ? (
-            <img
-              src={screenshot}
-              alt="Live browser observer"
-              className="relative z-10 h-full w-full object-contain"
-            />
-          ) : (
-            <div className="relative z-10 flex h-full items-center justify-center px-6 text-center text-sm text-slate-400">
-              Nova Sentinel is standing by for a target URL.
-            </div>
-          )}
+          <div className="relative z-10 max-h-[22rem] overflow-auto lg:max-h-[30rem] xl:max-h-[36rem]">
+            {screenshot ? (
+              <div className="relative">
+                <img src={screenshot} alt="Live browser observer" className="block w-full h-auto" />
+                <HighlightOverlay highlight={highlight} />
+              </div>
+            ) : (
+              <div className="flex min-h-[22rem] items-center justify-center px-6 text-center text-sm text-slate-400 lg:min-h-[30rem] xl:min-h-[36rem]">
+                Nova Sentinel is standing by for a target URL.
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="grid gap-3 xl:grid-cols-2">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_16rem]">
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
             <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-cyan-300">Reasoning</p>
             <p className="mt-3 text-sm leading-6 text-slate-200">
-              {latestThought?.reasoning ?? session?.lastAudit ?? "The Auditor stream will appear here."}
+              {latestThought?.details ?? latestThought?.reasoning ?? session?.lastAudit ?? "The Auditor stream will appear here."}
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
             <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-violet-300">Confidence</p>
             <p className="mt-3 text-4xl font-semibold text-white">
-              {latestThought ? `${Math.round(latestThought.confidenceScore)}%` : "--"}
+              {typeof latestThought?.confidenceScore === "number" ? `${Math.round(latestThought.confidenceScore)}%` : "--"}
             </p>
-            <p className="mt-2 text-xs text-slate-400">
-              The confidence score is taken directly from the Nova Auditor response when available.
+            <p className="mt-2 text-xs text-slate-400">Confidence is taken from the active Auditor payload.</p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-cyan-300">Live Test Access</p>
+            <p className="mt-2 break-all text-sm text-slate-400">
+              {liveUrl ?? "A target URL will appear here once the run starts."}
             </p>
           </div>
+
+          {liveUrl ? (
+            <a
+              href={liveUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex shrink-0 items-center justify-center rounded-full border border-cyan-400/35 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20"
+            >
+              Open Live Target
+            </a>
+          ) : null}
         </div>
       </div>
     </PanelShell>
@@ -192,44 +367,121 @@ function ThoughtStreamPanel({ logs, selectedSessionId }) {
       title="Thought Stream"
       accent="text-emerald-300"
       headerSlot={<span className="font-mono text-xs text-slate-500">buffer {filteredLogs.length}/50</span>}
+      className="h-full"
     >
       <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
-        <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-xs text-slate-400">
-          Raw JSON from the Nova Pro Auditor. New entries slide in as the model reassesses the UI state.
+        <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-xs leading-6 text-slate-400">
+          Each step is collapsed by default so the stream stays responsive. Open any row to inspect the reasoning,
+          success state, and raw Bedrock output.
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto pr-1">
           <AnimatePresence initial={false}>
             {filteredLogs.length ? (
-              filteredLogs.map((log) => (
-                <motion.article
+              filteredLogs.map((log, index) => {
+                const outcome = getThoughtOutcome(log);
+
+                return (
+                <motion.details
                   key={log.id}
                   initial={{ opacity: 0, y: 14 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
                   transition={{ duration: 0.18 }}
-                  className="rounded-2xl border border-emerald-400/20 bg-slate-950/80 p-4 font-mono text-xs shadow-[0_12px_40px_rgba(3,7,18,0.35)]"
+                  open={log.ghost || index === 0}
+                  className={`group rounded-2xl border shadow-[0_12px_40px_rgba(3,7,18,0.35)] ${
+                    log.ghost
+                      ? "border-cyan-300/20 bg-cyan-400/[0.05]"
+                      : "border-emerald-400/15 bg-slate-950/80"
+                  }`}
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-[10px] uppercase tracking-[0.24em] text-emerald-300">{log.status}</span>
-                    <span className="text-slate-500">{log.at}</span>
+                  <summary className="flex cursor-pointer list-none flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`font-mono text-[10px] uppercase tracking-[0.24em] ${
+                            log.ghost ? "text-cyan-200" : "text-emerald-300"
+                          }`}
+                        >
+                          Step {log.step}
+                        </span>
+                        <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${outcome.tone}`}>
+                          {outcome.label}
+                        </span>
+                        <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-300">
+                          {outcome.detail}
+                        </span>
+                      </div>
+
+                      <h3 className="mt-3 text-sm font-semibold text-white sm:text-base">{log.title}</h3>
+                      <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-400">{log.details}</p>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 sm:block sm:text-right">
+                      <span className="font-mono text-xs text-slate-500">{log.at}</span>
+                      <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 sm:mt-4">
+                        <span className="transition group-open:rotate-180">⌄</span>
+                        Expand
+                      </span>
+                    </div>
+                  </summary>
+
+                  <div className="border-t border-white/10 px-4 py-4">
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem]">
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                        <p
+                          className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${
+                            log.ghost ? "text-cyan-200" : "text-slate-300"
+                          }`}
+                        >
+                          Reasoning
+                        </p>
+                        <p className={`mt-3 text-sm leading-6 ${log.ghost ? "text-cyan-50/80" : "text-slate-300"}`}>
+                          {log.details}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-3">
+                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                            Step Result
+                          </p>
+                          <p className="mt-3 text-sm font-semibold text-white">{outcome.detail}</p>
+                        </div>
+
+                        {log.ghost ? (
+                          <div className="flex items-center gap-3 rounded-2xl border border-cyan-300/15 bg-cyan-400/[0.04] px-3 py-4">
+                            <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-cyan-300" />
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-100/90">
+                              Nova is reasoning in Frankfurt
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                              Confidence
+                            </p>
+                            <p className="mt-3 font-mono text-2xl text-cyan-200">{Math.round(log.confidenceScore)}%</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {!log.ghost ? (
+                      <details className="mt-4 rounded-2xl border border-white/10 bg-black/25">
+                        <summary className="cursor-pointer list-none px-4 py-3 font-mono text-[11px] uppercase tracking-[0.22em] text-slate-400">
+                          Raw JSON
+                        </summary>
+                        <pre className="overflow-x-auto border-t border-white/10 px-4 py-4 font-mono text-[11px] leading-6 text-cyan-100">
+                          {log.raw}
+                        </pre>
+                      </details>
+                    ) : null}
                   </div>
-                  <div className="mt-3 space-y-2 text-slate-200">
-                    <p>
-                      <span className="text-slate-500">Action:</span> {log.action}
-                    </p>
-                    <p className="leading-6">
-                      <span className="text-slate-500">Reasoning:</span> {log.reasoning}
-                    </p>
-                    <p>
-                      <span className="text-slate-500">Confidence:</span> {Math.round(log.confidenceScore)}%
-                    </p>
-                  </div>
-                  <pre className="mt-4 overflow-x-auto rounded-xl border border-white/10 bg-black/30 p-3 text-[11px] leading-6 text-cyan-100">
-                    {log.raw}
-                  </pre>
-                </motion.article>
-              ))
+                </motion.details>
+                );
+              })
+            
             ) : (
               <motion.div
                 initial={{ opacity: 0 }}
@@ -264,7 +516,7 @@ function IncidentCard({ incident, selected, onSelect }) {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-rose-300">{incident.type}</p>
-          <h3 className="mt-2 text-sm font-semibold text-white">{incident.summary}</h3>
+          <h3 className="mt-2 text-sm font-semibold leading-6 text-white">{incident.summary}</h3>
         </div>
         <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.2em] text-slate-300">
           {incident.severity}
@@ -286,7 +538,9 @@ function IncidentCard({ incident, selected, onSelect }) {
         )}
       </div>
 
-      <p className="mt-3 text-xs leading-6 text-slate-400">{incident.evidenceSummary || "Awaiting incident media."}</p>
+      <p className="mt-3 text-xs leading-6 text-slate-400">
+        {incident.evidenceSummary || "Awaiting incident media."}
+      </p>
     </motion.button>
   );
 }
@@ -297,11 +551,12 @@ function IncidentArchivePanel({ incidents, selectedSessionId, onSelectSession })
       title="Incident Archive (Nova Reel)"
       accent="text-rose-300"
       headerSlot={<span className="font-mono text-xs text-slate-500">{incidents.length} incidents</span>}
+      className="h-full"
     >
       <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
-        <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-xs text-slate-400">
-          Each incident card is hydrated in place. If the video is still rendering, the card stays in a guarded
-          loading state instead of looking broken.
+        <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-xs leading-6 text-slate-400">
+          Incident cards stay hydrated while evidence is rendering. Judges see clear loading state instead of an empty
+          broken panel.
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto pr-1">
@@ -341,19 +596,32 @@ export default function App() {
   const [screenshot, setScreenshot] = useState(null);
   const [socketConnected, setSocketConnected] = useState(socket.connected);
   const [launching, setLaunching] = useState(false);
+  const [railTab, setRailTab] = useState("thoughts");
+  const [highlightsBySession, setHighlightsBySession] = useState({});
+  const selectedSessionIdRef = useRef(selectedSessionId);
+
+  const deferredLogs = useDeferredValue(logs);
+  const deferredIncidents = useDeferredValue(incidents);
+
+  useEffect(() => {
+    selectedSessionIdRef.current = selectedSessionId;
+  }, [selectedSessionId]);
 
   async function refreshSessions() {
     const response = await fetch(`${API_BASE}/api/sessions`);
     const data = await response.json();
+
     setSessions(data);
 
     const knownIncidents = data.map(incidentFromSession).filter(Boolean);
-    setIncidents((current) => {
-      let next = [...current];
-      for (const incident of knownIncidents) {
-        next = mergeIncident(next, incident);
-      }
-      return next;
+    startTransition(() => {
+      setIncidents((current) => {
+        let next = [...current];
+        for (const incident of knownIncidents) {
+          next = mergeIncident(next, incident);
+        }
+        return next;
+      });
     });
 
     setSelectedSessionId((current) => current ?? selectPreferredSession(data));
@@ -378,9 +646,10 @@ export default function App() {
     }
 
     function handleUiUpdate(payload) {
-      setScreenshot((current) =>
-        !selectedSessionId || payload.sessionId === selectedSessionId ? payload.image : current
-      );
+      if (!selectedSessionIdRef.current || payload.sessionId === selectedSessionIdRef.current) {
+        setScreenshot(payload.image);
+      }
+
       setSessions((current) =>
         current.map((session) =>
           session.id === payload.sessionId
@@ -393,30 +662,42 @@ export default function App() {
             : session
         )
       );
+
       setSelectedSessionId((current) => current ?? payload.sessionId);
     }
 
     function handleThought(payload) {
-      setLogs((current) => [thoughtFromPayload(payload), ...current].slice(0, 50));
+      startTransition(() => {
+        setLogs((current) =>
+          [thoughtFromPayload(payload), ...current.filter((entry) => !isSameThoughtMove(entry, payload))].slice(0, 50)
+        );
+      });
+      setHighlightsBySession((current) => ({
+        ...current,
+        [payload.sessionId]: payload.highlight ?? null
+      }));
     }
 
-    function handleBugFound(payload) {
-      setIncidents((current) =>
-        mergeIncident(current, {
-          ...payload,
-          updatedAt: new Date().toISOString()
-        })
-      );
-      refreshSessions().catch(console.error);
+    function handleStartingMove(payload) {
+      startTransition(() => {
+        setLogs((current) =>
+          [ghostThoughtFromPayload(payload), ...current.filter((entry) => !isSameThoughtMove(entry, payload))].slice(
+            0,
+            50
+          )
+        );
+      });
     }
 
-    function handleIncidentUpdated(payload) {
-      setIncidents((current) =>
-        mergeIncident(current, {
-          ...payload,
-          updatedAt: new Date().toISOString()
-        })
-      );
+    function handleBugPayload(payload) {
+      startTransition(() => {
+        setIncidents((current) =>
+          mergeIncident(current, {
+            ...payload,
+            updatedAt: new Date().toISOString()
+          })
+        );
+      });
       refreshSessions().catch(console.error);
     }
 
@@ -428,9 +709,10 @@ export default function App() {
     socket.on("disconnect", handleDisconnect);
     socket.on("session.created", handleSessionCreated);
     socket.on("ui-update", handleUiUpdate);
+    socket.on("ai-starting-move", handleStartingMove);
     socket.on("ai-thought", handleThought);
-    socket.on("bug-found", handleBugFound);
-    socket.on("incident-updated", handleIncidentUpdated);
+    socket.on("bug-found", handleBugPayload);
+    socket.on("incident-updated", handleBugPayload);
     socket.on("session.passed", handleSessionTerminal);
     socket.on("session.failed", handleSessionTerminal);
 
@@ -439,19 +721,22 @@ export default function App() {
       socket.off("disconnect", handleDisconnect);
       socket.off("session.created", handleSessionCreated);
       socket.off("ui-update", handleUiUpdate);
+      socket.off("ai-starting-move", handleStartingMove);
       socket.off("ai-thought", handleThought);
-      socket.off("bug-found", handleBugFound);
-      socket.off("incident-updated", handleIncidentUpdated);
+      socket.off("bug-found", handleBugPayload);
+      socket.off("incident-updated", handleBugPayload);
       socket.off("session.passed", handleSessionTerminal);
       socket.off("session.failed", handleSessionTerminal);
     };
-  }, [selectedSessionId]);
+  }, []);
 
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? sessions[0] ?? null;
   const latestThought =
-    logs.find((entry) => entry.sessionId === (selectedSession?.id ?? selectedSessionId)) ??
-    logs[0] ??
+    deferredLogs.find((entry) => entry.sessionId === (selectedSession?.id ?? selectedSessionId)) ??
+    deferredLogs[0] ??
     null;
+  const activeHighlight =
+    highlightsBySession[selectedSession?.id ?? selectedSessionId] ?? selectedSession?.currentHighlight ?? null;
   const statusMeta = summarizeSocketState(socketConnected);
 
   useEffect(() => {
@@ -504,27 +789,29 @@ export default function App() {
         ) : null}
       </AnimatePresence>
 
-      <div className="mx-auto flex h-screen max-w-[1880px] flex-col gap-4 p-4">
-        <header className="rounded-3xl border border-white/10 bg-slate-900/75 px-5 py-5 shadow-panel backdrop-blur">
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+      <div className="mx-auto flex min-h-screen max-w-[1880px] flex-col gap-4 p-3 sm:p-4">
+        <header className="rounded-3xl border border-white/10 bg-slate-900/75 px-4 py-4 shadow-panel backdrop-blur sm:px-5 sm:py-5">
+          <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(34rem,46rem)]">
             <div className="space-y-3">
               <div className="flex items-center gap-3">
                 <span className={`h-3 w-3 rounded-full ${statusMeta.tone}`} />
                 <span className="text-xs font-semibold uppercase tracking-[0.36em] text-slate-300">
                   {statusMeta.label}
                 </span>
+                <span className="hidden text-xs text-slate-500 sm:inline">{statusMeta.text}</span>
               </div>
+
               <div>
                 <h1 className="text-3xl font-semibold tracking-tight text-white md:text-5xl">Sentinel Dashboard</h1>
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400">
-                  Observe Nova-driven intent testing in real time. The left panel streams the browser, the center panel
-                  exposes Auditor reasoning, and the archive tracks failures with replay evidence.
+                  Observe Nova-driven intent testing in real time. The live feed gets priority, while the thought
+                  stream and incident archive compress intelligently on smaller screens.
                 </p>
               </div>
             </div>
 
-            <form className="grid gap-3 rounded-3xl border border-white/10 bg-white/[0.03] p-4 xl:w-[42rem]" onSubmit={startRun}>
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_16rem]">
+            <form className="grid gap-3 rounded-3xl border border-white/10 bg-white/[0.03] p-4" onSubmit={startRun}>
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_16rem]">
                 <label className="grid gap-2 text-sm text-slate-400">
                   Goal
                   <input
@@ -543,14 +830,16 @@ export default function App() {
                   />
                 </label>
               </div>
+
               <datalist id="goal-presets">
                 {sampleGoals.map((item) => (
                   <option key={item} value={item} />
                 ))}
               </datalist>
-              <div className="flex flex-wrap items-center justify-between gap-3">
+
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div className="flex flex-wrap gap-2">
-                  {sessions.slice(0, 3).map((session) => (
+                  {sessions.slice(0, 4).map((session) => (
                     <button
                       key={session.id}
                       type="button"
@@ -565,6 +854,7 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+
                 <button
                   type="submit"
                   disabled={launching}
@@ -577,14 +867,42 @@ export default function App() {
           </div>
         </header>
 
-        <main className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.28fr)_minmax(330px,0.82fr)_minmax(330px,0.9fr)]">
-          <LiveFeedPanel screenshot={screenshot} session={selectedSession} latestThought={latestThought} />
-          <ThoughtStreamPanel logs={logs} selectedSessionId={selectedSession?.id ?? selectedSessionId} />
-          <IncidentArchivePanel
-            incidents={incidents}
-            selectedSessionId={selectedSession?.id ?? selectedSessionId}
-            onSelectSession={setSelectedSessionId}
-          />
+        <main className="grid min-h-0 flex-1 gap-4 xl:grid-cols-12">
+          <div className="min-h-0 xl:col-span-7 2xl:col-span-8">
+            <LiveFeedPanel
+              screenshot={screenshot}
+              session={selectedSession}
+              latestThought={latestThought}
+              highlight={activeHighlight}
+            />
+          </div>
+
+          <div className="min-h-0 xl:col-span-5 2xl:col-span-4">
+            <div className="flex h-full min-h-0 flex-col gap-4">
+              <RailTabs tab={railTab} setTab={setRailTab} />
+
+              <div className="hidden min-h-0 flex-1 gap-4 xl:grid xl:grid-rows-2 2xl:grid-cols-1 2xl:grid-rows-2">
+                <ThoughtStreamPanel logs={deferredLogs} selectedSessionId={selectedSession?.id ?? selectedSessionId} />
+                <IncidentArchivePanel
+                  incidents={deferredIncidents}
+                  selectedSessionId={selectedSession?.id ?? selectedSessionId}
+                  onSelectSession={setSelectedSessionId}
+                />
+              </div>
+
+              <div className="min-h-0 xl:hidden">
+                {railTab === "thoughts" ? (
+                  <ThoughtStreamPanel logs={deferredLogs} selectedSessionId={selectedSession?.id ?? selectedSessionId} />
+                ) : (
+                  <IncidentArchivePanel
+                    incidents={deferredIncidents}
+                    selectedSessionId={selectedSession?.id ?? selectedSessionId}
+                    onSelectSession={setSelectedSessionId}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
         </main>
       </div>
     </div>

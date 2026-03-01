@@ -23,6 +23,7 @@ export class SessionStore {
       bug: null,
       success: null,
       frame: null,
+      currentHighlight: null,
       history: [],
       timeline: []
     };

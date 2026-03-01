@@ -98,12 +98,12 @@ export class BrowserSession {
             checked: element instanceof HTMLInputElement ? element.checked : false,
             value: element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.value : "",
             bounds: {
-              x: rect.x,
-              y: rect.y,
+              x: rect.x + window.scrollX,
+              y: rect.y + window.scrollY,
               width: rect.width,
               height: rect.height,
-              centerX: rect.x + rect.width / 2,
-              centerY: rect.y + rect.height / 2
+              centerX: rect.x + window.scrollX + rect.width / 2,
+              centerY: rect.y + window.scrollY + rect.height / 2
             }
           };
         });
@@ -119,8 +119,8 @@ export class BrowserSession {
             text: element.textContent?.trim().replace(/\s+/g, " ").slice(0, 160) ?? "",
             selector: makeSelector(element),
             bounds: {
-              x: rect.x,
-              y: rect.y,
+              x: rect.x + window.scrollX,
+              y: rect.y + window.scrollY,
               width: rect.width,
               height: rect.height
             }
@@ -135,9 +135,21 @@ export class BrowserSession {
         "[data-loader='true']"
       ];
 
+      let spinnerBounds = null;
       const spinnerVisible = spinnerSelectors.some((selector) => {
         const element = document.querySelector(selector);
-        return element ? isElementVisible(element) : false;
+        if (!element || !isElementVisible(element)) {
+          return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        spinnerBounds = {
+          x: rect.x + window.scrollX,
+          y: rect.y + window.scrollY,
+          width: rect.width,
+          height: rect.height
+        };
+        return true;
       });
 
       return {
@@ -145,9 +157,20 @@ export class BrowserSession {
         url: window.location.href,
         bodyText: document.body.innerText.replace(/\s+/g, " ").slice(0, 2400),
         readyState: document.readyState,
+        pageWidth: Math.max(
+          document.documentElement.scrollWidth,
+          document.body.scrollWidth,
+          window.innerWidth
+        ),
+        pageHeight: Math.max(
+          document.documentElement.scrollHeight,
+          document.body.scrollHeight,
+          window.innerHeight
+        ),
         interactive,
         overlays,
-        spinnerVisible
+        spinnerVisible,
+        spinnerBounds
       };
     });
 

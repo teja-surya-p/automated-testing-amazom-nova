@@ -53,12 +53,33 @@ function mapSocketEvent(type, payload) {
       data: {
         sessionId: payload.sessionId,
         step: payload.step,
+        phase: payload.phase ?? "before-action",
         status: payload.status,
+        title: payload.stepTitle ?? payload.title ?? payload.action,
         action: payload.action,
+        details: payload.details ?? payload.reasoning,
         reasoning: payload.reasoning,
+        confidence: payload.confidenceScore,
         confidenceScore: payload.confidenceScore,
+        timestamp: payload.timestamp ?? new Date().toISOString(),
+        highlight: payload.highlight ?? null,
         raw: payload.raw,
         bug: payload.bug ?? null
+      }
+    };
+  }
+
+  if (type === "audit.starting") {
+    return {
+      event: "ai-starting-move",
+      data: {
+        sessionId: payload.sessionId,
+        step: payload.step,
+        phase: payload.phase ?? "before-action",
+        status: payload.status ?? "thinking",
+        title: payload.title ?? "Analyzing current view...",
+        details: payload.details ?? "Nova Auditor is processing the current screenshot.",
+        timestamp: payload.timestamp ?? new Date().toISOString()
       }
     };
   }

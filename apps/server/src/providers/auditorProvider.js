@@ -8,6 +8,19 @@ const auditorClient = hasBedrockRuntime()
     })
   : null;
 
+function limitWords(value, count = 5) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, count)
+    .join(" ");
+}
+
 function repeatedActionCount(recentActions) {
   const normalized = recentActions
     .filter((entry) => (entry.action ?? entry).type !== "wait")
@@ -25,9 +38,12 @@ function serializeAudit(audit) {
   return JSON.stringify(
     {
       status: audit.status,
+      stepTitle: audit.stepTitle,
       action: audit.action,
+      details: audit.details,
       reasoning: audit.reasoning,
       confidenceScore: audit.confidenceScore,
+      highlight: audit.highlight,
       nextInstruction: audit.nextInstruction,
       obstruction: audit.obstruction,
       bug: audit.bug
@@ -38,8 +54,11 @@ function serializeAudit(audit) {
 }
 
 function enrichAudit(audit) {
+  const candidateStepTitle = audit.stepTitle ?? audit.title ?? audit.action ?? audit.nextInstruction;
   const enriched = {
+    stepTitle: limitWords(candidateStepTitle || "Analyzing current view"),
     action: audit.action ?? audit.nextInstruction ?? "Inspecting current UI state",
+    details: audit.details ?? audit.reasoning ?? audit.thought ?? "Evaluating the latest browser state.",
     reasoning: audit.reasoning ?? audit.thought ?? "Evaluating the latest browser state.",
     confidenceScore: clamp(Number(audit.confidenceScore ?? 72), 0, 100),
     ...audit
@@ -49,6 +68,69 @@ function enrichAudit(audit) {
     ...enriched,
     raw: audit.raw ?? serializeAudit(enriched)
   };
+}
+
+function normalizeBounds(bounds, snapshot) {
+  if (!bounds || !snapshot.pageWidth || !snapshot.pageHeight) {
+    return null;
+  }
+
+  const widthPct = Math.max((bounds.width / snapshot.pageWidth) * 100, 4);
+  const heightPct = Math.max((bounds.height / snapshot.pageHeight) * 100, 4);
+  const xPct = Math.min((bounds.x / snapshot.pageWidth) * 100, 100 - widthPct);
+  const yPct = Math.min((bounds.y / snapshot.pageHeight) * 100, 100 - heightPct);
+
+  return {
+    xPct,
+    yPct,
+    widthPct,
+    heightPct
+  };
+}
+
+function deriveHighlight(context, audit) {
+  if (audit.status === "success") {
+    return null;
+  }
+
+  if ((audit.status === "bug" || audit.status === "recoverable") && context.snapshot.overlays.length) {
+    const normalized = normalizeBounds(context.snapshot.overlays[0].bounds, context.snapshot);
+    if (normalized) {
+      return {
+        kind: "circle",
+        tone: "rose",
+        label: audit.status === "bug" ? "Blocking issue" : "Obstruction",
+        ...normalized
+      };
+    }
+  }
+
+  if (context.snapshot.spinnerVisible && context.snapshot.spinnerBounds) {
+    const normalized = normalizeBounds(context.snapshot.spinnerBounds, context.snapshot);
+    if (normalized) {
+      return {
+        kind: "circle",
+        tone: audit.status === "bug" ? "amber" : "cyan",
+        label: "Loader stall",
+        ...normalized
+      };
+    }
+  }
+
+  if (audit.status === "bug" && context.lastAction?.elementId) {
+    const element = context.snapshot.interactive.find((item) => item.elementId === context.lastAction.elementId);
+    const normalized = normalizeBounds(element?.bounds, context.snapshot);
+    if (normalized) {
+      return {
+        kind: "circle",
+        tone: "violet",
+        label: "Repeated target",
+        ...normalized
+      };
+    }
+  }
+
+  return null;
 }
 
 function heuristicAudit(context) {
@@ -74,7 +156,9 @@ function heuristicAudit(context) {
     return enrichAudit({
       status: "bug",
       thought: thought.join(" "),
+      stepTitle: "Reporting Loader Hang",
       action: "Declaring performance hang",
+      details: "The loader is still visible and the screen has stopped changing, so the session should be terminated and documented.",
       reasoning: "The loader remains visible and the screen hash has not changed for multiple audit cycles.",
       confidenceScore: 96,
       nextInstruction: "Stop the session and report a hang bug.",
@@ -96,7 +180,9 @@ function heuristicAudit(context) {
     return enrichAudit({
       status: "bug",
       thought: thought.join(" "),
+      stepTitle: "Stopping Repeat Loop",
       action: "Declaring state amnesia",
+      details: "The agent is repeating the same interaction and is no longer making forward progress.",
       reasoning: "The agent is repeating the same non-progressing action pattern without changing the screen.",
       confidenceScore: 94,
       nextInstruction: "Stop retrying the same interaction.",
@@ -117,7 +203,9 @@ function heuristicAudit(context) {
     return enrichAudit({
       status: "recoverable",
       thought: thought.join(" "),
+      stepTitle: "Clearing Blocking Popup",
       action: "Dismissing blocking overlay",
+      details: "A visible modal is covering the controls needed for the next user action.",
       reasoning: "The current UI contains a visible modal that obstructs interactive controls.",
       confidenceScore: 89,
       nextInstruction: "Dismiss the popup before the next action.",
@@ -133,7 +221,9 @@ function heuristicAudit(context) {
     return enrichAudit({
       status: "success",
       thought: "The registration flow is complete.",
+      stepTitle: "Confirming Signup Success",
       action: "Declaring success",
+      details: "The page now shows a completed account-creation state.",
       reasoning: "The screen contains a clear account-created success state.",
       confidenceScore: 98,
       nextInstruction: "Goal reached.",
@@ -149,7 +239,9 @@ function heuristicAudit(context) {
     return enrichAudit({
       status: "success",
       thought: "Checkout completed successfully.",
+      stepTitle: "Confirming Checkout Success",
       action: "Declaring success",
+      details: "The checkout flow has reached a successful order or invoice state.",
       reasoning: "The checkout state shows invoice approval or order completion without a card.",
       confidenceScore: 97,
       nextInstruction: "Goal reached.",
@@ -164,7 +256,12 @@ function heuristicAudit(context) {
   return enrichAudit({
     status: "proceed",
     thought: thought.join(" ") || "The page looks usable.",
+    stepTitle: context.snapshot.spinnerVisible ? "Waiting on Active Loader" : "Scanning Current State",
     action: "Proceeding with the next move",
+    details:
+      context.snapshot.overlays.length > 0
+        ? "The auditor sees an obstruction and is steering the explorer toward clearing it first."
+        : "No blocking conditions are visible, so the agent can continue the current intent path.",
     reasoning:
       context.snapshot.overlays.length > 0
         ? "A visible overlay exists and should be handled first."
@@ -189,6 +286,14 @@ function normalizeAuditorResponse(raw, fallback) {
 
   const normalized = {
     status: typeof parsed.status === "string" ? parsed.status : fallback.status,
+    stepTitle:
+      typeof parsed.step_title === "string"
+        ? parsed.step_title
+        : typeof parsed.stepTitle === "string"
+          ? parsed.stepTitle
+          : typeof parsed.title === "string"
+            ? parsed.title
+            : fallback.stepTitle,
     thought:
       typeof parsed.thought === "string"
         ? parsed.thought
@@ -201,6 +306,14 @@ function normalizeAuditorResponse(raw, fallback) {
         : typeof parsed.nextInstruction === "string"
           ? parsed.nextInstruction
           : fallback.action,
+    details:
+      typeof parsed.details === "string"
+        ? parsed.details
+        : typeof parsed.reasoning === "string"
+          ? parsed.reasoning
+          : typeof parsed.thought === "string"
+            ? parsed.thought
+            : fallback.details,
     reasoning:
       typeof parsed.reasoning === "string"
         ? parsed.reasoning
@@ -269,7 +382,10 @@ export async function auditUserInterface(context) {
               `Spinner visible: ${context.snapshot.spinnerVisible}`,
               `Visible text summary: ${context.snapshot.bodyText}`,
               "Return strict JSON only.",
-              'JSON shape: {"status":"proceed|recoverable|bug|success","action":"short next action label","reasoning":"why this matters","confidenceScore":87,"thought":"optional detailed summary","nextInstruction":"short instruction","obstruction":{"present":false,"summary":""},"bug":null}',
+              "For every step, provide a user-friendly step_title with at most 5 words that describes the actual intent.",
+              "Never use generic titles like Proceeding, Continue, Review, or Next Step.",
+              "Use concrete summaries such as Navigating To Checkout, Filling Shipping Address, or Clearing Blocking Popup.",
+              'JSON shape: {"status":"proceed|recoverable|bug|success","step_title":"Navigating to Checkout","action":"short next action label","details":"user-friendly explanation","reasoning":"technical reason","confidenceScore":87,"thought":"optional detailed summary","nextInstruction":"short instruction","obstruction":{"present":false,"summary":""},"bug":null}',
               "If there is a bug, set bug to { type, severity, summary, evidencePrompt }."
             ].join("\n")
           },
@@ -314,15 +430,22 @@ export function createAuditorProvider() {
               nextInstruction: fallback.nextInstruction,
               obstruction: fallback.obstruction.present ? fallback.obstruction : response.obstruction,
               bug: fallback.bug ?? response.bug,
-              raw: response.raw
+              raw: response.raw,
+              highlight: deriveHighlight(context, fallback)
             });
           }
 
-          return response;
+          return enrichAudit({
+            ...response,
+            highlight: deriveHighlight(context, response)
+          });
         }
       }
 
-      return fallback;
+      return enrichAudit({
+        ...fallback,
+        highlight: deriveHighlight(context, fallback)
+      });
     }
   };
 }

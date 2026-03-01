@@ -1,5 +1,5 @@
 import { config } from "../lib/config.js";
-import { pickLast } from "../lib/utils.js";
+import { nowIso, pickLast } from "../lib/utils.js";
 import { BrowserSession } from "../services/browserSession.js";
 import { RingBuffer } from "../services/ringBuffer.js";
 
@@ -88,6 +88,15 @@ export class QaOrchestrator {
         message: `${snapshot.title} @ ${snapshot.url}`
       });
       this.emit("frame", framePayload);
+      this.emit("audit.starting", {
+        sessionId,
+        step,
+        phase: "before-action",
+        status: "thinking",
+        title: "Analyzing current view...",
+        details: "Nova Auditor is reviewing the latest screenshot for blockers, loaders, and goal progress.",
+        timestamp: nowIso()
+      });
 
       const preAudit = await this.auditorProvider.audit({
         goal: session.goal,
@@ -100,7 +109,8 @@ export class QaOrchestrator {
       });
 
       this.sessionStore.patchSession(sessionId, {
-        lastAudit: preAudit.thought
+        lastAudit: preAudit.thought,
+        currentHighlight: preAudit.highlight ?? null
       });
       this.sessionStore.appendTimeline(sessionId, {
         type: "audit",
@@ -110,6 +120,7 @@ export class QaOrchestrator {
         sessionId,
         step,
         phase: "before-action",
+        timestamp: nowIso(),
         ...preAudit
       });
 
