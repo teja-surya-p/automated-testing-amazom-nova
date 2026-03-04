@@ -6,6 +6,7 @@ function matchElement(interactive, patterns, options = {}) {
   return interactive.find((element) => {
     const haystack = [
       element.text,
+      element.ariaLabel,
       element.placeholder,
       element.name,
       element.type
@@ -17,8 +18,128 @@ function matchElement(interactive, patterns, options = {}) {
       return false;
     }
 
+    if (options.zone && element.zone !== options.zone) {
+      return false;
+    }
+
     return normalizedPatterns.some((pattern) => haystack.includes(pattern));
   });
+}
+
+function normalizeWhitespace(value) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function cleanPhrase(value) {
+  return normalizeWhitespace(
+    value
+      .replace(/^[\s"'“”‘’]+|[\s"'“”‘’]+$/g, "")
+      .replace(/\b(?:and|then)\s+press\s+the\s+enter\s+key\b.*$/i, "")
+      .replace(/\b(?:once|after|before)\b.*$/i, "")
+      .replace(/\b(?:explicitly\s+)?ignore\b.*$/i, "")
+      .replace(/\bscan\s+the\b.*$/i, "")
+      .replace(/\bcross-verify\b.*$/i, "")
+      .replace(/[.;]+$/g, "")
+  );
+}
+
+function scoreQuotedCandidate(goalLower, candidate, index) {
+  const normalizedCandidate = candidate.toLowerCase();
+  const prefix = goalLower.slice(Math.max(0, index - 50), index);
+  const suffix = goalLower.slice(index, Math.min(goalLower.length, index + candidate.length + 50));
+  let score = 0;
+
+  if (!normalizedCandidate || normalizedCandidate.length > 80) {
+    return -100;
+  }
+
+  if (/^(shopping|ad|youtube mix|semanticmap|shopping tab|left sidebar)$/i.test(candidate)) {
+    score -= 50;
+  }
+
+  if (/\b(?:type|search(?: for)?|look up|find|play|matching|title matching|song)\b/.test(prefix)) {
+    score += 12;
+  }
+
+  if (/\b(?:ignore|excluding|skip|labeled as)\b/.test(prefix)) {
+    score -= 12;
+  }
+
+  if (/\b(?:ignore|excluding|skip|labeled as)\b/.test(suffix)) {
+    score -= 10;
+  }
+
+  const wordCount = normalizedCandidate.split(/\s+/).filter(Boolean).length;
+  if (wordCount >= 1 && wordCount <= 6) {
+    score += 5;
+  }
+
+  if (/^[a-z0-9][a-z0-9\s-]{1,40}$/i.test(candidate)) {
+    score += 4;
+  }
+
+  if (/[,.]/.test(candidate)) {
+    score -= 8;
+  }
+
+  return score;
+}
+
+function extractQuotedSearchIntent(goal) {
+  const normalizedGoal = normalizeWhitespace(goal);
+  const goalLower = normalizedGoal.toLowerCase();
+  const quotePattern = /["“”'‘’]([^"“”'‘’]{1,120})["“”'‘’]/g;
+  let best = "";
+  let bestScore = -100;
+
+  for (const match of normalizedGoal.matchAll(quotePattern)) {
+    const candidate = cleanPhrase(match[1] ?? "");
+    const score = scoreQuotedCandidate(goalLower, candidate, match.index ?? 0);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return bestScore > 0 ? best : "";
+}
+
+function extractPatternSearchIntent(goal) {
+  const patterns = [
+    /\btype\s+["“”'‘’]?([^"“”'‘’.,;]+?)["“”'‘’]?(?:,|\band\b|\bthen\b|\bonce\b|$)/i,
+    /\bsearch(?:\s+for)?\s+["“”'‘’]?([^"“”'‘’.,;]+?)["“”'‘’]?(?:\s+on\b|,|\band\b|\bthen\b|$)/i,
+    /\bfind\s+["“”'‘’]?([^"“”'‘’.,;]+?)["“”'‘’]?(?:\s+on\b|,|\band\b|\bthen\b|$)/i,
+    /\bmatching\s+["“”'‘’]?([^"“”'‘’.,;]+?)["“”'‘’]?(?:,|\band\b|\bthen\b|$)/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = goal.match(pattern);
+    if (match?.[1]) {
+      const cleaned = cleanPhrase(match[1]);
+      if (cleaned) {
+        return cleaned;
+      }
+    }
+  }
+
+  return "";
+}
+
+function parseVideoSearchGoal(goal) {
+  const searchIntent = extractQuotedSearchIntent(goal) || extractPatternSearchIntent(goal);
+  const normalizedGoal = normalizeWhitespace(goal);
+
+  return {
+    rawGoal: normalizedGoal,
+    searchIntent,
+    conciseGoal: searchIntent
+      ? `Search YouTube for "${searchIntent}" and play the matching official video.`
+      : normalizedGoal
+  };
+}
+
+function extractSearchIntent(goal) {
+  return parseVideoSearchGoal(goal).searchIntent;
 }
 
 function inferGoalFamily(goal) {
@@ -26,10 +147,157 @@ function inferGoalFamily(goal) {
   if (/(sign up|signup|register|create.*user|new user|account)/.test(normalized)) {
     return "signup";
   }
+  if (/(youtube|play.*song|play.*video|search.*youtube|premium landing page|get premium)/.test(normalized)) {
+    return "video-search";
+  }
   if (/(checkout|purchase|buy|credit card|cart)/.test(normalized)) {
     return "checkout";
   }
   return "generic";
+}
+
+function isLikelyYouTubeResult(element) {
+  const haystack = [element.text, element.ariaLabel, element.name].join(" ").toLowerCase();
+  if (!haystack || haystack.length < 8) {
+    return false;
+  }
+
+  if (element.zone !== "Primary Content") {
+    return false;
+  }
+
+  if (/(home|shorts|subscriptions|history|you|sign in|settings|explore|shopping)/.test(haystack)) {
+    return false;
+  }
+
+  if (/\bad\b|youtube mix|mix - /.test(haystack)) {
+    return false;
+  }
+
+  return element.tag === "a" || /play|watch|video/.test(haystack);
+}
+
+function scoreYouTubeResult(searchIntent, element) {
+  const normalizedIntent = searchIntent.toLowerCase();
+  const normalizedText = [element.text, element.ariaLabel, element.name].join(" ").toLowerCase();
+  if (!normalizedText) {
+    return -1;
+  }
+
+  let score = 0;
+  if (normalizedText.includes(normalizedIntent)) {
+    score += 6;
+  }
+
+  const tokens = normalizedIntent.split(/\s+/).filter(Boolean);
+  for (const token of tokens) {
+    if (normalizedText.includes(token)) {
+      score += 1;
+    }
+  }
+
+  if (/official|video|song|lyrics/.test(normalizedText)) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function summarizeSemanticAction(snapshot, action) {
+  const target = snapshot.interactive.find((element) => element.elementId === action?.elementId) ?? null;
+  if (!target) {
+    return null;
+  }
+
+  return {
+    elementId: target.elementId,
+    label: target.text || target.ariaLabel || target.placeholder || target.name || target.id || target.tag,
+    zone: target.zone,
+    landmark: target.landmark,
+    center: [Math.round(target.bounds.centerX), Math.round(target.bounds.centerY)]
+  };
+}
+
+function heuristicPlanVideoSearch(goal, snapshot) {
+  const parsedGoal = parseVideoSearchGoal(goal);
+
+  if (/youtube\.com\/watch|youtu\.be\//i.test(snapshot.url)) {
+    return {
+      thinking: "Video playback page is open.",
+      action: { type: "done" },
+      isDone: true,
+      bug: null
+    };
+  }
+
+  const closeModal = matchElement(snapshot.interactive, [
+    "close",
+    "dismiss",
+    "not now",
+    "skip",
+    "no thanks",
+    "accept",
+    "reject",
+    "agree",
+    "later",
+    "got it"
+  ]);
+  if (snapshot.overlays.length && closeModal) {
+    return {
+      thinking: "Clearing a blocking YouTube overlay first.",
+      action: { type: "click", elementId: closeModal.elementId },
+      isDone: false,
+      bug: null
+    };
+  }
+
+  const searchIntent = parsedGoal.searchIntent;
+  const searchInput = matchElement(
+    snapshot.interactive,
+    ["search", "what do you want to watch", "search youtube", "search query"],
+    { inputOnly: true, zone: "Header" }
+  );
+  if (searchInput && searchIntent && searchInput.value !== searchIntent) {
+    return {
+      thinking: `Executing search for "${searchIntent}"`,
+      landmark: "Header Zone",
+      verification: "Header search input is visible and paired with the primary masthead search area.",
+      action: { type: "type", elementId: searchInput.elementId, text: searchIntent, pressEnter: true },
+      isDone: false,
+      bug: null
+    };
+  }
+
+  const firstResult = snapshot.interactive.find((element) => !element.disabled && isLikelyYouTubeResult(element));
+  const rankedResult = searchIntent
+    ? snapshot.interactive
+        .filter((element) => !element.disabled && isLikelyYouTubeResult(element))
+        .map((element) => ({
+          element,
+          score: scoreYouTubeResult(searchIntent, element)
+        }))
+        .sort((left, right) => right.score - left.score)[0]?.element ?? null
+    : firstResult;
+  if (rankedResult && /results\?search_query=|youtube\.com\//i.test(snapshot.url)) {
+    return {
+      thinking: `Selecting "${rankedResult.text}" from search results.`,
+      landmark: "Primary Content Zone",
+      verification: `Target matches "${rankedResult.text}" in the primary content zone and excludes sidebar, ad, and mix candidates.`,
+      targetText: rankedResult.text,
+      action: { type: "click", elementId: rankedResult.elementId },
+      isDone: false,
+      bug: null
+    };
+  }
+
+  return {
+    thinking: "Waiting for YouTube search UI to settle.",
+    landmark: "Primary Content Zone",
+    verification: "Waiting for visible video results before selecting a content card.",
+    action: { type: "wait", durationMs: 1200 },
+    isDone: false,
+    bug: null
+  };
 }
 
 function heuristicPlanSignup(snapshot) {
@@ -237,12 +505,37 @@ function heuristicPlanCheckout(snapshot) {
   };
 }
 
-function heuristicPlanGeneric(snapshot) {
-  const closeModal = matchElement(snapshot.interactive, ["close", "dismiss", "not now", "skip"]);
+function heuristicPlanGeneric(goal, snapshot) {
+  const closeModal = matchElement(snapshot.interactive, [
+    "close",
+    "dismiss",
+    "not now",
+    "skip",
+    "no thanks",
+    "accept",
+    "reject",
+    "agree",
+    "later"
+  ]);
   if (snapshot.overlays.length && closeModal) {
     return {
       thinking: "Closing a blocking popup before continuing.",
       action: { type: "click", elementId: closeModal.elementId },
+      isDone: false,
+      bug: null
+    };
+  }
+
+  const searchIntent = extractSearchIntent(goal);
+  const searchInput = matchElement(
+    snapshot.interactive,
+    ["search", "search query", "what do you want to watch", "search youtube"],
+    { inputOnly: true }
+  );
+  if (searchInput && searchIntent && searchInput.value !== searchIntent) {
+    return {
+      thinking: `Locating search bar to input "${searchIntent}".`,
+      action: { type: "type", elementId: searchInput.elementId, text: searchIntent, pressEnter: true },
       isDone: false,
       bug: null
     };
@@ -271,10 +564,29 @@ export function createExplorerProvider() {
 
   return {
     async plan(context) {
+      const parsedGoal = parseVideoSearchGoal(context.goal);
+
       if (agent) {
-        const response = await runExplorerAgent(agent, context);
+        const response = await runExplorerAgent(agent, {
+          ...context,
+          parsedGoal
+        });
         if (response?.action?.type) {
-          return response;
+          return {
+            ...response,
+            targetText:
+              response.targetText ??
+              summarizeSemanticAction(context.snapshot, response.action)?.label ??
+              null,
+            landmark:
+              response.landmark ??
+              summarizeSemanticAction(context.snapshot, response.action)?.zone ??
+              null,
+            verification:
+              response.verification ??
+              summarizeSemanticAction(context.snapshot, response.action)?.landmark ??
+              null
+          };
         }
       }
 
@@ -285,7 +597,10 @@ export function createExplorerProvider() {
       if (family === "checkout") {
         return heuristicPlanCheckout(context.snapshot);
       }
-      return heuristicPlanGeneric(context.snapshot);
+      if (family === "video-search") {
+        return heuristicPlanVideoSearch(parsedGoal.conciseGoal, context.snapshot);
+      }
+      return heuristicPlanGeneric(context.goal, context.snapshot);
     }
   };
 }

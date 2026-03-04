@@ -1,0 +1,33 @@
+{
+  "cookies": [
+    {
+      "name": "aws-waf-token",
+      "value": "e2ab8f91-c279-4069-b44a-4bc2ebf3d5cc:EQoAkVpFMKdVAAAA:9PDpVa31SxpKDDo6OHSh4Jk6fCJ5BL6X3xyehfIwZXmcGgF44c0b9ifCm4/frBmq+YyxkMI2JLf8BXDx1Vr71cAzj0SpDNtyWNr9veU1iaulXWvdgM742+bw0uE7hyeQxLSGZHZbOUy4AJLhJ8vkrkec3EaCeeM/DmAYKYZm79DrXT4v2CU8YzK32Z1SeDhL40xLEOtXYWw35S1c",
+      "domain": ".www.amazon.com",
+      "path": "/",
+      "expires": 1772704990,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.amazon.com",
+      "localStorage": [
+        {
+          "name": "aws_waf_referrer",
+          "value": "{\"referrer\":\"\"}"
+        },
+        {
+          "name": "awswaf_token_refresh_timestamp",
+          "value": "1772359390202"
+        },
+        {
+          "name": "aws_waf_token_challenge_attempts",
+          "value": "{\"attempts\":1,\"lastAttemptTimestamp\":1772359389957}"
+        }
+      ]
+    }
+  ]
+}

@@ -9,10 +9,17 @@
     "dev": "concurrently -n server,dashboard,target -c '#f97316,#f4d35e,#9ca3af' \"npm run dev --workspace @qa/server\" \"npm run dev --workspace @qa/dashboard\" \"npm run dev --workspace @qa/target\"",
     "build": "npm run build --workspaces",
     "lint": "npm run lint --workspaces",
-    "start": "npm run start --workspace @qa/server"
+    "start": "npm run start --workspace @qa/server",
+
+    "ports:kill": "npx kill-port 8787 4173 4174 || true",
+    "clean": "npm run ports:kill",
+    "demo": "npm run clean && npm run dev",
+    "smoke": "node -e \"Promise.all([8787,4173,4174].map(p=>fetch('http://localhost:'+p).then(r=>console.log(p,r.status)).catch(()=>console.log(p,'DOWN'))))\""
+  
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+     "kill-port": "^2.0.1"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock": "^3.1000.0"

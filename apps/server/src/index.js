@@ -59,6 +59,12 @@ function mapSocketEvent(type, payload) {
         action: payload.action,
         details: payload.details ?? payload.reasoning,
         reasoning: payload.reasoning,
+        blockers: payload.blockers ?? [],
+        nextBestAction: payload.nextBestAction ?? null,
+        targetAchieved: Boolean(payload.targetAchieved),
+        evidenceQualityScore: payload.evidenceQualityScore ?? 0,
+        targetText: payload.targetText ?? null,
+        targetCoordinates: payload.targetCoordinates ?? null,
         confidence: payload.confidenceScore,
         confidenceScore: payload.confidenceScore,
         timestamp: payload.timestamp ?? new Date().toISOString(),
@@ -84,6 +90,33 @@ function mapSocketEvent(type, payload) {
     };
   }
 
+  if (type === "action.planned") {
+    const isTypeAction = payload.action?.type === "type";
+    return {
+      event: "ai-thought",
+      data: {
+        sessionId: payload.sessionId,
+        step: payload.step,
+        phase: "action-plan",
+        status: "acting",
+        title: payload.thought ?? "Executing next action",
+        action: payload.action?.type ?? "act",
+        details: isTypeAction
+          ? "Keyboard-first submission is being used to avoid hidden button or overlay timeouts."
+          : `Explorer is executing a ${payload.action?.type ?? "browser"} action based on the current plan.`,
+        landmark: payload.landmark ?? null,
+        targetText: payload.targetText ?? null,
+        verification: payload.verification ?? null,
+        confidence: isTypeAction ? 98 : 88,
+        confidenceScore: isTypeAction ? 98 : 88,
+        timestamp: new Date().toISOString(),
+        highlight: null,
+        raw: JSON.stringify(payload, null, 2),
+        bug: null
+      }
+    };
+  }
+
   if (type === "bug" || type === "bug.updated") {
     return {
       event: type === "bug" ? "bug-found" : "incident-updated",
@@ -101,6 +134,13 @@ function mapSocketEvent(type, payload) {
   }
 
   if (type === "session.created" || type === "session.passed" || type === "session.failed") {
+    return {
+      event: type,
+      data: payload
+    };
+  }
+
+  if (type === "session.updated" || type === "session.soft-passed") {
     return {
       event: type,
       data: payload

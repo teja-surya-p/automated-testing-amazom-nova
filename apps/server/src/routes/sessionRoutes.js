@@ -36,10 +36,32 @@ export function createSessionRouter(orchestrator, sessionStore, documentarianPro
     const session = await orchestrator.start({
       goal,
       startUrl,
-      providerMode: req.body.providerMode ?? "auto"
+      providerMode: req.body.providerMode ?? "auto",
+      profileTag: req.body.profileTag ?? "",
+      crawlerMode: req.body.crawlerMode ?? null
     });
 
     res.status(202).json(session);
+  });
+
+  router.post("/sessions/:sessionId/resume", async (req, res) => {
+    const session = await orchestrator.resumeSession(req.params.sessionId);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    res.json(session);
+  });
+
+  router.get("/sessions/:sessionId/report", (req, res) => {
+    const session = sessionStore.getSession(req.params.sessionId);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    res.json(session.report ?? null);
   });
 
   router.get("/incidents/:sessionId/video", async (req, res) => {

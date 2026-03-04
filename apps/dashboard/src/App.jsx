@@ -78,6 +78,14 @@ function thoughtFromPayload(payload) {
     action: payload.action ?? payload.title ?? "Reviewing current state",
     details: payload.details ?? payload.reasoning ?? "No reasoning provided.",
     reasoning: payload.reasoning ?? payload.details ?? "No reasoning provided.",
+    blockers: payload.blockers ?? [],
+    nextBestAction: payload.nextBestAction ?? null,
+    targetAchieved: Boolean(payload.targetAchieved),
+    evidenceQualityScore: Number(payload.evidenceQualityScore ?? 0),
+    landmark: payload.landmark ?? null,
+    targetText: payload.targetText ?? null,
+    targetCoordinates: payload.targetCoordinates ?? null,
+    verification: payload.verification ?? null,
     confidence: Number(payload.confidence ?? payload.confidenceScore ?? 0),
     confidenceScore: Number(payload.confidence ?? payload.confidenceScore ?? 0),
     raw: payload.raw ?? "{}",
@@ -140,6 +148,10 @@ function ghostThoughtFromPayload(payload) {
     action: payload.action ?? "Analyzing current view...",
     details: payload.details ?? "Nova Auditor is processing the current screenshot.",
     reasoning: payload.details ?? "Nova Auditor is processing the current screenshot.",
+    landmark: payload.landmark ?? null,
+    targetText: payload.targetText ?? null,
+    targetCoordinates: payload.targetCoordinates ?? null,
+    verification: payload.verification ?? null,
     confidence: null,
     confidenceScore: null,
     raw: null,
@@ -169,8 +181,12 @@ function StatusPill({ status }) {
   const tone =
     status === "passed"
       ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+      : status === "soft-passed"
+        ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
       : status === "failed"
         ? "border-rose-400/30 bg-rose-400/10 text-rose-300"
+        : status === "waiting-login"
+          ? "border-amber-300/30 bg-amber-300/10 text-amber-100"
         : status === "running"
           ? "border-cyan-400/30 bg-cyan-400/10 text-cyan-200"
           : "border-white/10 bg-white/5 text-slate-300";
@@ -267,7 +283,185 @@ function PanelShell({ title, accent, children, headerSlot = null, className = ""
   );
 }
 
-function LiveFeedPanel({ screenshot, session, latestThought, highlight }) {
+function humanizeAction(action) {
+  if (!action) {
+    return "Pending";
+  }
+
+  if (typeof action === "string") {
+    return action;
+  }
+
+  if (action.type === "click") {
+    return "Click";
+  }
+  if (action.type === "type") {
+    return `Type${action.text ? ` "${action.text}"` : ""}`;
+  }
+  if (action.type === "wait") {
+    return "Wait";
+  }
+  if (action.type === "scroll") {
+    return "Scroll";
+  }
+  if (action.type === "goto") {
+    return `Go to ${action.url ?? "target"}`;
+  }
+  if (action.type === "refresh") {
+    return "Refresh";
+  }
+  if (action.type === "back") {
+    return "Go back";
+  }
+  if (action.type === "done") {
+    return "Complete";
+  }
+
+  return action.type ?? "Pending";
+}
+
+function stepResultTone(result) {
+  if (result === "advanced") {
+    return "border-emerald-400/20 bg-emerald-400/10 text-emerald-100";
+  }
+  if (result === "no-effect") {
+    return "border-amber-300/20 bg-amber-300/10 text-amber-100";
+  }
+  if (result === "planned" || result === "observed") {
+    return "border-cyan-300/20 bg-cyan-300/10 text-cyan-100";
+  }
+
+  return "border-white/10 bg-white/[0.04] text-slate-300";
+}
+
+function OutcomeBadge({ outcome }) {
+  const tone =
+    outcome === "PASS"
+      ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+      : outcome === "SOFT-PASS"
+        ? "border-amber-400/30 bg-amber-400/10 text-amber-100"
+        : outcome === "FAIL"
+          ? "border-rose-400/30 bg-rose-400/10 text-rose-200"
+          : "border-white/10 bg-white/[0.03] text-slate-300";
+
+  return (
+    <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] ${tone}`}>
+      {outcome ?? "Active"}
+    </span>
+  );
+}
+
+function RunSummaryPanel({ session, onResumeLogin }) {
+  const summary = session?.runSummary ?? null;
+  const blocker = summary?.primaryBlocker ?? session?.primaryBlocker ?? null;
+  const confidence = Math.round((blocker?.confidence ?? 0) * 100);
+  const steps = [...(session?.steps ?? [])].sort((left, right) => left.stepId - right.stepId);
+
+  return (
+    <PanelShell
+      title="Run Summary"
+      accent="text-amber-200"
+      headerSlot={<OutcomeBadge outcome={summary?.outcome} />}
+      className="h-full"
+    >
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Primary Blocker</p>
+          <p className="mt-3 text-sm font-semibold text-white">{blocker?.type ?? "None"}</p>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            {blocker?.rationale ?? "The run is currently exploring without a confirmed blocker."}
+          </p>
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/5">
+            <div className="h-full rounded-full bg-amber-300" style={{ width: `${confidence}%` }} />
+          </div>
+          <p className="mt-2 font-mono text-xs text-slate-500">{confidence}% confidence</p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Next Best Action</p>
+            <p className="mt-3 text-sm font-semibold text-cyan-100">
+              {summary?.nextBestAction ?? session?.outcome?.nextBestAction ?? "CONTINUE"}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Evidence Quality</p>
+            <p className="mt-3 text-sm font-semibold text-white">
+              {Math.round((summary?.evidenceQualityScore ?? session?.outcome?.evidenceQualityScore ?? 0) * 100)}%
+            </p>
+          </div>
+        </div>
+
+        {session?.loginAssist?.state === "WAIT_FOR_USER" ? (
+          <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-100">Login Required</p>
+            <p className="mt-3 text-sm leading-6 text-amber-50/90">
+              Complete authentication in the controlled browser for {session.loginAssist.domain}, then resume the run.
+            </p>
+            <button
+              type="button"
+              onClick={onResumeLogin}
+              className="mt-4 rounded-full border border-amber-200/30 bg-amber-200/10 px-4 py-2 text-sm font-semibold text-amber-50 transition hover:bg-amber-200/20"
+            >
+              Resume
+            </button>
+          </div>
+        ) : null}
+
+        <div className="min-h-0 rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200">Run Steps</p>
+            <span className="font-mono text-xs text-slate-500">{steps.length} recorded</span>
+          </div>
+
+          <div className="mt-4 max-h-[22rem] space-y-3 overflow-y-auto pr-1">
+            {steps.length ? (
+              steps.map((step) => (
+                <div key={step.stepId} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-cyan-200">
+                        Step {step.stepId}
+                      </p>
+                      <h3 className="mt-2 text-sm font-semibold text-white">
+                        {step.actionPlan?.thinking ?? humanizeAction(step.actionPlan?.action)}
+                      </h3>
+                    </div>
+                    <span
+                      className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${stepResultTone(step.result)}`}
+                    >
+                      {step.result ?? "pending"}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 text-sm text-slate-400">
+                    <p>
+                      <span className="text-slate-500">Planned:</span> {humanizeAction(step.actionPlan?.action)}
+                    </p>
+                    <p>
+                      <span className="text-slate-500">Attempted:</span> {humanizeAction(step.actionAttempted)}
+                    </p>
+                    {step.postConditions?.length ? (
+                      <p className="line-clamp-2">
+                        <span className="text-slate-500">Checks:</span> {step.postConditions.join(", ")}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-8 text-center text-sm text-slate-500">
+                Step records will appear here as the run advances.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </PanelShell>
+  );
+}
+
+function LiveFeedPanel({ screenshot, session, latestThought, highlight, onResumeLogin }) {
   const liveUrl = session?.currentUrl ?? session?.startUrl ?? null;
 
   return (
@@ -278,6 +472,29 @@ function LiveFeedPanel({ screenshot, session, latestThought, highlight }) {
       className="min-h-[28rem]"
     >
       <div className="flex h-full min-h-0 flex-col gap-4">
+        {session?.loginAssist?.state === "WAIT_FOR_USER" ? (
+          <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-amber-100">
+                  Login Assist
+                </p>
+                <p className="mt-2 text-sm leading-6 text-amber-50/90">
+                  Authentication is required on {session.loginAssist.domain}. Complete the login in the controlled
+                  browser window, then resume.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onResumeLogin}
+                className="rounded-full border border-amber-200/30 bg-amber-200/10 px-4 py-2 text-sm font-semibold text-amber-50 transition hover:bg-amber-200/20"
+              >
+                Resume
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="grid gap-3 rounded-2xl border border-cyan-400/20 bg-slate-950/70 p-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <div>
             <h2 className="max-w-xl text-2xl font-semibold leading-tight text-white sm:text-3xl">
@@ -415,6 +632,14 @@ function ThoughtStreamPanel({ logs, selectedSessionId }) {
 
                       <h3 className="mt-3 text-sm font-semibold text-white sm:text-base">{log.title}</h3>
                       <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-400">{log.details}</p>
+                      {log.landmark ? (
+                        <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-200/90">
+                          Landmark: {log.landmark}
+                        </p>
+                      ) : null}
+                      {log.targetText ? (
+                        <p className="mt-1 text-xs text-slate-400">Target: {log.targetText}</p>
+                      ) : null}
                     </div>
 
                     <div className="flex items-center justify-between gap-3 sm:block sm:text-right">
@@ -439,9 +664,46 @@ function ThoughtStreamPanel({ logs, selectedSessionId }) {
                         <p className={`mt-3 text-sm leading-6 ${log.ghost ? "text-cyan-50/80" : "text-slate-300"}`}>
                           {log.details}
                         </p>
+                        {log.verification ? (
+                          <div className="mt-4 rounded-2xl border border-cyan-400/15 bg-cyan-400/[0.05] p-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200">
+                              Verification
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-cyan-50/90">{log.verification}</p>
+                          </div>
+                        ) : null}
+                        {log.blockers?.length ? (
+                          <div className="mt-4 rounded-2xl border border-amber-300/15 bg-amber-300/[0.05] p-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-100">
+                              Blockers
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-amber-50/90">
+                              {log.blockers.map((blocker) => blocker.type).join(", ")}
+                            </p>
+                          </div>
+                        ) : null}
+                        {log.targetCoordinates ? (
+                          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                              Semantic Center
+                            </p>
+                            <p className="mt-2 font-mono text-sm text-slate-200">
+                              [{Math.round(log.targetCoordinates[0])}, {Math.round(log.targetCoordinates[1])}]
+                            </p>
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="grid gap-3">
+                        {log.landmark ? (
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                              Landmark
+                            </p>
+                            <p className="mt-3 text-sm font-semibold text-white">{log.landmark}</p>
+                          </div>
+                        ) : null}
+
                         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                           <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
                             Step Result
@@ -457,12 +719,22 @@ function ThoughtStreamPanel({ logs, selectedSessionId }) {
                             </span>
                           </div>
                         ) : (
-                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
-                              Confidence
-                            </p>
-                            <p className="mt-3 font-mono text-2xl text-cyan-200">{Math.round(log.confidenceScore)}%</p>
-                          </div>
+                          <>
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                                Confidence
+                              </p>
+                              <p className="mt-3 font-mono text-2xl text-cyan-200">{Math.round(log.confidenceScore)}%</p>
+                            </div>
+                            {log.nextBestAction ? (
+                              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">
+                                  Next Best Action
+                                </p>
+                                <p className="mt-3 text-sm font-semibold text-white">{log.nextBestAction}</p>
+                              </div>
+                            ) : null}
+                          </>
                         )}
                       </div>
                     </div>
@@ -645,6 +917,13 @@ export default function App() {
       setSessions((current) => [payload.session, ...current.filter((item) => item.id !== payload.session.id)]);
     }
 
+    function handleSessionUpdated(payload) {
+      setSessions((current) => [payload.session, ...current.filter((item) => item.id !== payload.session.id)]);
+      if (!selectedSessionIdRef.current) {
+        setSelectedSessionId(payload.sessionId);
+      }
+    }
+
     function handleUiUpdate(payload) {
       if (!selectedSessionIdRef.current || payload.sessionId === selectedSessionIdRef.current) {
         setScreenshot(payload.image);
@@ -672,10 +951,12 @@ export default function App() {
           [thoughtFromPayload(payload), ...current.filter((entry) => !isSameThoughtMove(entry, payload))].slice(0, 50)
         );
       });
-      setHighlightsBySession((current) => ({
-        ...current,
-        [payload.sessionId]: payload.highlight ?? null
-      }));
+      if (Object.prototype.hasOwnProperty.call(payload, "highlight")) {
+        setHighlightsBySession((current) => ({
+          ...current,
+          [payload.sessionId]: payload.highlight ?? null
+        }));
+      }
     }
 
     function handleStartingMove(payload) {
@@ -708,24 +989,28 @@ export default function App() {
     socket.on("connect", handleConnect);
     socket.on("disconnect", handleDisconnect);
     socket.on("session.created", handleSessionCreated);
+    socket.on("session.updated", handleSessionUpdated);
     socket.on("ui-update", handleUiUpdate);
     socket.on("ai-starting-move", handleStartingMove);
     socket.on("ai-thought", handleThought);
     socket.on("bug-found", handleBugPayload);
     socket.on("incident-updated", handleBugPayload);
     socket.on("session.passed", handleSessionTerminal);
+    socket.on("session.soft-passed", handleSessionTerminal);
     socket.on("session.failed", handleSessionTerminal);
 
     return () => {
       socket.off("connect", handleConnect);
       socket.off("disconnect", handleDisconnect);
       socket.off("session.created", handleSessionCreated);
+      socket.off("session.updated", handleSessionUpdated);
       socket.off("ui-update", handleUiUpdate);
       socket.off("ai-starting-move", handleStartingMove);
       socket.off("ai-thought", handleThought);
       socket.off("bug-found", handleBugPayload);
       socket.off("incident-updated", handleBugPayload);
       socket.off("session.passed", handleSessionTerminal);
+      socket.off("session.soft-passed", handleSessionTerminal);
       socket.off("session.failed", handleSessionTerminal);
     };
   }, []);
@@ -767,6 +1052,17 @@ export default function App() {
     } finally {
       setLaunching(false);
     }
+  }
+
+  async function resumeLoginAssist() {
+    if (!selectedSession?.id) {
+      return;
+    }
+
+    await fetch(`${API_BASE}/api/sessions/${selectedSession.id}/resume`, {
+      method: "POST"
+    });
+    await refreshSessions();
   }
 
   return (
@@ -874,11 +1170,13 @@ export default function App() {
               session={selectedSession}
               latestThought={latestThought}
               highlight={activeHighlight}
+              onResumeLogin={resumeLoginAssist}
             />
           </div>
 
           <div className="min-h-0 xl:col-span-5 2xl:col-span-4">
             <div className="flex h-full min-h-0 flex-col gap-4">
+              <RunSummaryPanel session={selectedSession} onResumeLogin={resumeLoginAssist} />
               <RailTabs tab={railTab} setTab={setRailTab} />
 
               <div className="hidden min-h-0 flex-1 gap-4 xl:grid xl:grid-rows-2 2xl:grid-cols-1 2xl:grid-rows-2">

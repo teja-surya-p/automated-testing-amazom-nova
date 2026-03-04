@@ -45,15 +45,22 @@ export function createExplorerAgent() {
     config.explorerModelId,
     [
       "You are Explorer, the browser-driving agent in a QA orchestrator.",
-      "You receive a goal, the current page state, and the last three actions.",
+      "You receive a goal, the current page state, a semantic map, and the last three semantic actions.",
       "Return strict JSON with no markdown.",
+      "If you see a cookie consent, sign-in wall, or newsletter popup, dismiss it before pursuing the goal.",
+      "Treat the sidebar or guide as a no-go zone when searching on YouTube.",
+      "Prefer the header search region for typing and the primary content region for opening results.",
       "Prefer closing blocking popups first.",
       "Avoid repeating the same action if it did not change the screen.",
+      "Cross-check the screenshot against the semantic map before selecting an elementId.",
+      "If the target is a YouTube video, it must be in the Primary Content landmark.",
       "Only reference elementId values that appear in the provided interactive elements list.",
       "Supported action types: click, type, scroll, wait, done, bug.",
       "For type actions, include a realistic text value.",
+      "If the task is a search flow, prefer typing into the search field and pressing Enter instead of hunting for a search icon.",
+      "Ignore any result labeled Ad or YouTube Mix.",
       "JSON shape:",
-      '{"thinking":"short reason","action":{"type":"click","elementId":"el-1","text":"","deltaY":0,"durationMs":0},"isDone":false,"bug":null}'
+      '{"thinking":"short reason","landmark":"Header Zone","verification":"Selected target from the semantic map","targetText":"Search","action":{"type":"click","elementId":"el-1","text":"","deltaY":0,"durationMs":0,"pressEnter":false},"isDone":false,"bug":null}'
     ].join(" ")
   );
 }
@@ -75,14 +82,24 @@ export function createAuditorAgent() {
 
 export async function runExplorerAgent(agent, context) {
   const prompt = [
-    `Goal: ${context.goal}`,
+    `Goal: ${context.parsedGoal?.conciseGoal ?? context.goal}`,
+    `Raw goal: ${context.goal}`,
+    `Parsed search intent: ${context.parsedGoal?.searchIntent ?? ""}`,
     `Step: ${context.step}`,
     `Current URL: ${context.snapshot.url}`,
     `Recent actions: ${JSON.stringify(context.recentActions)}`,
+    `Recent semantic actions: ${JSON.stringify(context.recentSemanticActions ?? [])}`,
     `Auditor instruction: ${context.auditorInstruction || "None"}`,
     `Interactive elements: ${JSON.stringify(context.snapshot.interactive)}`,
+    `Semantic map: ${JSON.stringify(context.snapshot.semanticMap ?? [])}`,
     `Visible overlays: ${JSON.stringify(context.snapshot.overlays)}`,
-    `Visible text summary: ${context.snapshot.bodyText}`
+    `Visible text summary: ${context.snapshot.bodyText}`,
+    "Use Header zone for search and Primary Content zone for result selection.",
+    "Treat Sidebar zone as a no-go area for YouTube result selection.",
+    "If an overlay or consent wall is present, dismiss it first.",
+    "If a search input is visible, typing and pressing Enter is more reliable than clicking a search icon.",
+    "Ignore any result labeled Ad or YouTube Mix.",
+    "Before choosing an action, identify the target text from the semantic map and then select the matching elementId."
   ].join("\n");
 
   return invokeJson(agent, prompt, context.snapshot.screenshotBase64);
