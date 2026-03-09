@@ -1,0 +1,105 @@
+{
+  "cookies": [
+    {
+      "name": "CLID",
+      "value": "935c570d03524aa4a19e9bc9858b9356.20260306.20270306",
+      "domain": "www.clarity.ms",
+      "path": "/",
+      "expires": 1804292716.123386,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_clck",
+      "value": "wd32no%5E2%5Eg44%5E0%5E2256",
+      "domain": ".rewardsy.one",
+      "path": "/",
+      "expires": 1804292716,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "MUID",
+      "value": "14A23510E2446C6527C62204E3926DE9",
+      "domain": ".bing.com",
+      "path": "/",
+      "expires": 1806452716.515598,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "MR",
+      "value": "0",
+      "domain": ".c.bing.com",
+      "path": "/",
+      "expires": 1773361516.515643,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "SRM_B",
+      "value": "14A23510E2446C6527C62204E3926DE9",
+      "domain": ".c.bing.com",
+      "path": "/",
+      "expires": 1806452716.515656,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_clsk",
+      "value": "1igm5rx%5E1772756716517%5E1%5E1%5Ej.clarity.ms%2Fcollect",
+      "domain": ".rewardsy.one",
+      "path": "/",
+      "expires": 1772843116,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "SM",
+      "value": "C",
+      "domain": ".c.clarity.ms",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "MUID",
+      "value": "14A23510E2446C6527C62204E3926DE9",
+      "domain": ".clarity.ms",
+      "path": "/",
+      "expires": 1806452716.551957,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "MR",
+      "value": "0",
+      "domain": ".c.clarity.ms",
+      "path": "/",
+      "expires": 1773361516.551977,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ANONCHK",
+      "value": "0",
+      "domain": ".c.clarity.ms",
+      "path": "/",
+      "expires": 1772757316.551988,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    }
+  ],
+  "origins": []
+}

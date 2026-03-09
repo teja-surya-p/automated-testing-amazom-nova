@@ -1,0 +1,105 @@
+{
+  "cookies": [
+    {
+      "name": "GPS",
+      "value": "1",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1772992540.645647,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "YSC",
+      "value": "MvxdEv06SRU",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "VISITOR_INFO1_LIVE",
+      "value": "jy4h2vQe-hI",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1788542740.645751,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "VISITOR_PRIVACY_METADATA",
+      "value": "CgJVUxIEGgAgLg%3D%3D",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1788542740.645767,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "PREF",
+      "value": "tz=America.New_York",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1807550741.384544,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__Secure-YNID",
+      "value": "16.YT=P_-lHD94-kIis9iWEtPymJ8gpcnb39ptCkMdH4zEg7yMC67Owreyz9elWS_RQMK_iKF3a4K8eF0hCtfFlwRTbYOk_kF0O00casPl_y01TcvOhBI-GDWwWvy-m6D5Pr5CqDXQDA_Tf_w1_XoQ3hCI_KVQiZ-glZe0agnX9Ni0NoFrUauacf5CA2xsO1m33trORPMeP2KYWeUZP7eYA79V59BbDBLRwjxMGGooRiPVN_ZiDZLkpI98r9SoooV1ZqXjQrAuUTykBN3sefRLImdlL1jldkPEKmep7plnfKkhvjlfXBdNI53AvRnchkow5OO2EL9heTgj0guuS0KSk9u0xA",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1788542740.410869,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://youtube.com",
+      "_crHasCrossSiteAncestor": false
+    },
+    {
+      "name": "__Secure-ROLLOUT_TOKEN",
+      "value": "CKn8h735sqHtExCGp6Ka6ZCTAxiugdGa6ZCTAw%3D%3D",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1788542741.410903,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://youtube.com",
+      "_crHasCrossSiteAncestor": false
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.youtube.com",
+      "localStorage": [
+        {
+          "name": "yt-remote-connected-devices",
+          "value": "{\"data\":\"[]\",\"expiration\":1773077141554,\"creation\":1772990741554}"
+        },
+        {
+          "name": "Ve48db13c||::yt-player::yt-player-lv",
+          "value": "{\"data\":\"{}\",\"creation\":1772990741562}"
+        },
+        {
+          "name": "ytidb::LAST_RESULT_ENTRY_KEY",
+          "value": "{\"data\":{\"hasSucceededOnce\":true},\"expiration\":1775582741325,\"creation\":1772990741325}"
+        },
+        {
+          "name": "yt-remote-device-id",
+          "value": "{\"data\":\"9fc3abd8-b154-45a1-bdf6-bedd88b88a17\",\"expiration\":1804526741552,\"creation\":1772990741552}"
+        },
+        {
+          "name": "yt-icons-last-purged",
+          "value": "1768847141261"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Safe functional upload fixture.

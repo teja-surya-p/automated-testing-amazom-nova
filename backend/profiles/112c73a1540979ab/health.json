@@ -1,0 +1,10 @@
+{
+  "profileId": "112c73a1540979ab",
+  "domain": "www.amazon.com",
+  "purpose": "auth",
+  "lastSuccessfulRunAt": null,
+  "lastLoginAt": null,
+  "lastBlockerType": "LOGIN_REQUIRED",
+  "lastUsedAt": "2026-03-09T05:22:36.353Z",
+  "createdAt": "2026-03-09T05:22:36.353Z"
+}

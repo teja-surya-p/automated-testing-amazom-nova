@@ -4,5 +4,6 @@ dist
 .DS_Store
 playwright-report
 test-results
-apps/server/artifacts
-apps/server/.cache
+backend/artifacts
+backend/src/artifacts
+backend/.cache

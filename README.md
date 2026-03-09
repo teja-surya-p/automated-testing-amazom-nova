@@ -4,7 +4,6 @@ Node/JavaScript implementation of an intent-based QA system with:
 
 - a Node backend that runs the test state machine and Playwright browser loop
 - a React dashboard that streams screenshots and agent reasoning in real time
-- a React target app with sign-up, checkout, popup, and loader chaos cases
 
 ## What is implemented
 
@@ -18,9 +17,28 @@ Node/JavaScript implementation of an intent-based QA system with:
 
 ## Workspace layout
 
-- `apps/server`: Express API, Playwright runner, agent orchestration, evidence generation
-- `apps/dashboard`: real-time React operations console
-- `apps/target`: sample React storefront and sign-up app for demo/testing
+- `backend`: Express API, Playwright runner, agent orchestration, evidence generation
+- `frontend`: real-time React operations console
+
+## Code layout: `src/types` + `src/library`
+
+- Type-specific logic lives in `backend/src/types/<type>/` (`foundation`, `uiux`, `functional`, `accessibility`, plus placeholders for the remaining test types).
+- Cross-type shared modules live in `backend/src/library/` (schemas, policies, URL helpers, reporting, metrics).
+- See `docs/TYPE_MAP.md` for exact folder responsibilities and add-new-rule steps.
+
+## Tests
+
+- Server tests run from both legacy and type-local locations via:
+  - `npm test --workspace @qa/server`
+- The server test command uses Node test globs:
+  - `test/**/*.test.js`
+  - `src/types/**/tests/**/*.test.js`
+
+## Artifacts
+
+- Runtime artifacts must never be written under `backend/src`.
+- Use `backend/artifacts` (configured by `ARTIFACTS_DIR`).
+- If artifacts appear under `backend/src/artifacts`, run `npm run clean` and remove that misplaced folder.
 
 ## Run it
 
@@ -56,25 +74,328 @@ npm run dev
 
 Services:
 
-- dashboard: [http://localhost:4173](http://localhost:4173)
-- API/events: [http://localhost:8787](http://localhost:8787)
-- target app: [http://localhost:4174](http://localhost:4174)
+- dashboard: [http://localhost:3001](http://localhost:3001)
+- API/events: [http://localhost:3000](http://localhost:3000)
 
-## Demo goals
+## Example UI/UX session payload
 
-Use these in the dashboard:
+Send to `POST /api/sessions/start`:
 
-- `Create a new user`
-- `Find a way to check out without a credit card`
-- `Detect whether the checkout flow is blocked by a popup`
+```json
+{
+  "runConfig": {
+    "startUrl": "https://example.com/store",
+    "goal": "UI/UX audit (coverage)",
+    "testMode": "uiux",
+    "exploration": {
+      "strategy": "coverage-driven",
+      "urlFrontierEnabled": true,
+      "canonicalizeUrls": true,
+      "depthLimit": 6
+    },
+    "budgets": {
+      "maxSteps": 40,
+      "timeBudgetMs": 300000
+    },
+    "artifacts": {
+      "captureHtml": true,
+      "captureA11ySnapshot": true,
+      "captureVideo": "always"
+    },
+    "uiux": {
+      "viewports": [
+        { "label": "mobile", "width": 390, "height": 844 },
+        { "label": "tablet", "width": 768, "height": 1024 },
+        { "label": "desktop", "width": 1440, "height": 900 }
+      ],
+      "artifactRetention": {
+        "maxSnapshotsPerViewport": 4,
+        "keepOnlyFailedOrFlaggedSteps": true,
+        "keepDomForIssuesOnly": true
+      }
+    },
+    "safety": {
+      "destructiveActionPolicy": "strict",
+      "paymentWallStop": true
+    }
+  }
+}
+```
 
-Useful start URLs:
+## Example functional session payload (safe submits)
 
-- `http://localhost:4174/signup`
-- `http://localhost:4174/store`
-- `http://localhost:4174/checkout?newsletterPopup=false&stuckLoader=true&slowReview=false`
+Send to `POST /api/sessions/start`:
 
-The last URL forces the infinite-loader path so the Auditor should raise a `performance-hang` bug and the Documentarian should emit `/artifacts/<sessionId>/evidence.mp4`.
+```bash
+curl -sS -X POST http://localhost:3000/api/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runConfig": {
+      "startUrl": "https://example.com/store",
+      "goal": "Functional smoke-pack with controlled search/filter/pagination submits",
+      "testMode": "functional",
+      "profileTag": "functional-local",
+      "budgets": {
+        "maxSteps": 30,
+        "timeBudgetMs": 240000
+      },
+      "functional": {
+        "strategy": "smoke-pack",
+        "maxFlows": 6,
+        "maxStepsPerFlow": 12,
+        "allowFormSubmit": true,
+        "allowedSubmitTypes": ["search", "filter", "pagination"],
+        "testDataProfile": "synthetic",
+        "loginAssist": {
+          "enabled": true,
+          "timeoutMs": 180000,
+          "resumeStrategy": "restart-flow"
+        },
+        "profile": {
+          "requireProfileTag": true,
+          "reuseProfileAcrossRuns": true
+        },
+        "assertions": {
+          "failOnConsoleError": true,
+          "failOn5xx": true
+        },
+        "contracts": {
+          "failOnApi5xx": true,
+          "warnOnThirdPartyFailures": true,
+          "endpointAllowlistPatterns": ["/api/*", "/graphql"],
+          "endpointBlocklistPatterns": ["/api/analytics/*"]
+        }
+      },
+      "safety": {
+        "destructiveActionPolicy": "strict",
+        "paymentWallStop": true
+      }
+    }
+  }'
+```
+
+Functional baseline write example (stores metadata only in `backend/baselines/functional/functional-release.json`):
+
+```bash
+curl -sS -X POST http://localhost:3000/api/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runConfig": {
+      "startUrl": "https://example.com/store",
+      "goal": "Functional baseline write",
+      "testMode": "functional",
+      "profileTag": "functional-local",
+      "functional": {
+        "strategy": "smoke-pack",
+        "allowFormSubmit": true,
+        "contracts": {
+          "failOnApi5xx": true,
+          "warnOnThirdPartyFailures": true
+        },
+        "baseline": { "baselineId": "functional-release", "mode": "write" }
+      }
+    }
+  }'
+```
+
+Functional baseline compare example (returns `report.functional.baselineDiff`):
+
+```bash
+curl -sS -X POST http://localhost:3000/api/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runConfig": {
+      "startUrl": "https://example.com/store",
+      "goal": "Functional baseline compare",
+      "testMode": "functional",
+      "profileTag": "functional-local",
+      "functional": {
+        "strategy": "smoke-pack",
+        "allowFormSubmit": true,
+        "contracts": {
+          "failOnApi5xx": true,
+          "warnOnThirdPartyFailures": true
+        },
+        "baseline": { "baselineId": "functional-release", "mode": "compare" }
+      }
+    }
+  }'
+```
+
+## Example accessibility session payload
+
+Send to `POST /api/sessions/start`:
+
+```bash
+curl -sS -X POST http://localhost:3000/api/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runConfig": {
+      "startUrl": "https://example.com/store",
+      "goal": "Accessibility coverage scan",
+      "testMode": "accessibility",
+      "budgets": {
+        "maxSteps": 30,
+        "timeBudgetMs": 240000
+      },
+      "accessibility": {
+        "strategy": "coverage-a11y",
+        "maxPages": 20,
+        "ruleset": "wcag-lite",
+        "failOnCritical": true,
+        "baseline": {
+          "baselineId": "a11y-release",
+          "mode": "off"
+        }
+      },
+      "exploration": {
+        "strategy": "coverage-driven",
+        "urlFrontierEnabled": true,
+        "canonicalizeUrls": true,
+        "depthLimit": 6
+      },
+      "artifacts": {
+        "captureHtml": true,
+        "captureA11ySnapshot": true,
+        "captureVideo": "fail-only"
+      },
+      "safety": {
+        "destructiveActionPolicy": "strict",
+        "paymentWallStop": true
+      }
+    }
+  }'
+```
+
+## Local responsive smoke path (bounded)
+
+Use this for a quick UI/UX validation pass with retention enabled:
+
+```bash
+curl -sS -X POST http://localhost:3000/api/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runConfig": {
+      "startUrl": "https://example.com/store",
+      "goal": "UI/UX responsive smoke",
+      "testMode": "uiux",
+      "exploration": {
+        "strategy": "coverage-driven",
+        "urlFrontierEnabled": true,
+        "canonicalizeUrls": true,
+        "depthLimit": 3
+      },
+      "budgets": {
+        "maxSteps": 8,
+        "timeBudgetMs": 90000
+      },
+      "artifacts": {
+        "captureHtml": true,
+        "captureA11ySnapshot": true,
+        "captureVideo": "fail-only"
+      },
+      "uiux": {
+        "viewports": [
+          { "label": "mobile", "width": 390, "height": 844 },
+          { "label": "tablet", "width": 768, "height": 1024 },
+          { "label": "desktop", "width": 1440, "height": 900 }
+        ],
+        "artifactRetention": {
+          "maxSnapshotsPerViewport": 2,
+          "keepOnlyFailedOrFlaggedSteps": true,
+          "keepDomForIssuesOnly": true
+        }
+      },
+      "safety": {
+        "destructiveActionPolicy": "strict",
+        "paymentWallStop": true
+      }
+    }
+  }'
+```
+
+Expected smoke verification:
+- run completes without crash
+- UI/UX summary shows issue counts grouped per viewport
+- artifact retention summary shows retained/pruned counts
+
+Cross-page consistency run example:
+
+```bash
+curl -sS -X POST http://localhost:3000/api/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runConfig": {
+      "startUrl": "https://example.com/store",
+      "goal": "UI/UX cross-page consistency audit",
+      "testMode": "uiux",
+      "exploration": {
+        "strategy": "coverage-driven",
+        "urlFrontierEnabled": true,
+        "canonicalizeUrls": true,
+        "depthLimit": 5
+      },
+      "budgets": { "maxSteps": 20, "timeBudgetMs": 180000 },
+      "artifacts": {
+        "captureHtml": true,
+        "captureA11ySnapshot": true,
+        "captureVideo": "fail-only"
+      },
+      "uiux": {
+        "viewports": [
+          { "label": "mobile", "width": 390, "height": 844 },
+          { "label": "desktop", "width": 1440, "height": 900 }
+        ],
+        "artifactRetention": {
+          "maxSnapshotsPerViewport": 3,
+          "keepOnlyFailedOrFlaggedSteps": true,
+          "keepDomForIssuesOnly": true
+        }
+      },
+      "safety": { "destructiveActionPolicy": "strict", "paymentWallStop": true }
+    }
+  }'
+```
+
+Baseline write example (stores metadata only in `backend/baselines/uiux/release-smoke.json`):
+
+```bash
+curl -sS -X POST http://localhost:3000/api/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runConfig": {
+      "startUrl": "https://example.com/store",
+      "goal": "UI/UX baseline write",
+      "testMode": "uiux",
+      "exploration": { "strategy": "coverage-driven", "urlFrontierEnabled": true, "canonicalizeUrls": true, "depthLimit": 4 },
+      "budgets": { "maxSteps": 16, "timeBudgetMs": 180000 },
+      "uiux": {
+        "baseline": { "baselineId": "release-smoke", "mode": "write" }
+      },
+      "safety": { "destructiveActionPolicy": "strict", "paymentWallStop": true }
+    }
+  }'
+```
+
+Baseline compare example (returns `report.uiux.baselineDiff`):
+
+```bash
+curl -sS -X POST http://localhost:3000/api/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runConfig": {
+      "startUrl": "https://example.com/store",
+      "goal": "UI/UX baseline compare",
+      "testMode": "uiux",
+      "exploration": { "strategy": "coverage-driven", "urlFrontierEnabled": true, "canonicalizeUrls": true, "depthLimit": 4 },
+      "budgets": { "maxSteps": 16, "timeBudgetMs": 180000 },
+      "uiux": {
+        "baseline": { "baselineId": "release-smoke", "mode": "compare" }
+      },
+      "safety": { "destructiveActionPolicy": "strict", "paymentWallStop": true }
+    }
+  }'
+```
 
 ## AWS-backed mode
 

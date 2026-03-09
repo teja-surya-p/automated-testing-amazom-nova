@@ -1,0 +1,1214 @@
+{
+  "id": "qa_8ca11b98",
+  "createdAt": "2026-03-09T18:49:11.518Z",
+  "updatedAt": "2026-03-09T19:10:07.421Z",
+  "status": "cancelled",
+  "goal": "uiux scan for https://lrm-main.vercel.app",
+  "startUrl": "https://lrm-main.vercel.app",
+  "runConfig": {
+    "startUrl": "https://lrm-main.vercel.app",
+    "goal": "uiux scan for https://lrm-main.vercel.app",
+    "testMode": "uiux",
+    "providerMode": "auto",
+    "profileTag": "",
+    "crawlerMode": false,
+    "budgets": {
+      "maxSteps": 18,
+      "timeBudgetMs": 600000,
+      "stagnationLimit": 3,
+      "actionRetryCount": 3
+    },
+    "artifacts": {
+      "captureHtml": false,
+      "captureA11ySnapshot": false,
+      "captureHar": false,
+      "captureTraceOnFail": false,
+      "captureVideo": "fail-only"
+    },
+    "safety": {
+      "allowlistDomains": [],
+      "blocklistDomains": [],
+      "destructiveActionPolicy": "strict",
+      "paymentWallStop": true
+    },
+    "exploration": {
+      "strategy": "coverage-driven",
+      "depthLimit": 6,
+      "urlFrontierEnabled": true,
+      "canonicalizeUrls": true
+    },
+    "readiness": {
+      "uiReadyStrategy": "networkidle-only",
+      "readyTimeoutMs": 10000
+    },
+    "uiux": {
+      "maxPages": 24,
+      "depthLimit": 6,
+      "perDomainCap": 120,
+      "maxInteractionsPerPage": 6,
+      "timeBudgetMs": 600000,
+      "devices": {
+        "mode": "quick",
+        "selection": "cap",
+        "maxDevices": 3,
+        "allowlist": [],
+        "blocklist": [],
+        "includeUserAgents": false
+      },
+      "artifactRetention": {
+        "maxSnapshotsPerViewport": 12,
+        "keepOnlyFailedOrFlaggedSteps": false,
+        "keepDomForIssuesOnly": false
+      },
+      "baseline": {
+        "baselineId": "",
+        "mode": "off"
+      }
+    },
+    "functional": {
+      "strategy": "smoke-pack",
+      "maxFlows": 6,
+      "maxStepsPerFlow": 12,
+      "allowFormSubmit": false,
+      "allowedSubmitTypes": [
+        "search",
+        "filter",
+        "pagination"
+      ],
+      "testDataProfile": "synthetic",
+      "loginAssist": {
+        "enabled": true,
+        "timeoutMs": 180000,
+        "resumeStrategy": "restart-flow"
+      },
+      "capabilities": {
+        "allowNewTabs": true,
+        "allowDownloads": true,
+        "allowUploads": false,
+        "uploadFixturePath": "fixtures/upload.txt"
+      },
+      "readiness": {
+        "strategy": "hybrid",
+        "postClickSettleMs": 800
+      },
+      "profile": {
+        "requireProfileTag": true,
+        "reuseProfileAcrossRuns": true
+      },
+      "assertions": {
+        "failOnConsoleError": true,
+        "failOn5xx": true
+      },
+      "contracts": {
+        "failOnApi5xx": true,
+        "warnOnThirdPartyFailures": true,
+        "endpointAllowlistPatterns": [],
+        "endpointBlocklistPatterns": []
+      },
+      "baseline": {
+        "baselineId": "",
+        "mode": "off"
+      }
+    },
+    "accessibility": {
+      "strategy": "coverage-a11y",
+      "maxPages": 20,
+      "focusProbeTabSteps": 10,
+      "forms": {
+        "enabled": true,
+        "mode": "observe-only",
+        "safeSubmitTypes": [
+          "search"
+        ],
+        "maxValidationAttemptsPerPage": 1
+      },
+      "contrast": {
+        "enabled": true,
+        "sampleLimit": 40,
+        "minRatioNormalText": 4.5,
+        "minRatioLargeText": 3
+      },
+      "textScale": {
+        "enabled": true,
+        "scales": [
+          1,
+          1.25,
+          1.5
+        ]
+      },
+      "reducedMotion": {
+        "enabled": true
+      },
+      "ruleset": "wcag-lite",
+      "failOnCritical": true,
+      "baseline": {
+        "baselineId": "",
+        "mode": "off"
+      }
+    }
+  },
+  "providerMode": "auto",
+  "goalFamily": "generic",
+  "profileId": "72b908c814718145",
+  "profile": {
+    "profileId": "72b908c814718145",
+    "purpose": "general",
+    "domain": "lrm-main.vercel.app",
+    "tag": "lrm-main-vercel-app",
+    "profileDir": "/Users/surya/Desktop/hackathons/automated-testing-amazom-nova/backend/profiles/72b908c814718145",
+    "storageStatePath": "/Users/surya/Desktop/hackathons/automated-testing-amazom-nova/backend/profiles/72b908c814718145/storage-state.json",
+    "healthPath": "/Users/surya/Desktop/hackathons/automated-testing-amazom-nova/backend/profiles/72b908c814718145/health.json"
+  },
+  "sessionHealth": {
+    "profileId": "72b908c814718145",
+    "domain": "lrm-main.vercel.app",
+    "purpose": "general",
+    "lastSuccessfulRunAt": "2026-03-09T18:45:27.964Z",
+    "lastLoginAt": "2026-03-09T18:45:27.962Z",
+    "lastBlockerType": null,
+    "lastUsedAt": "2026-03-09T18:45:27.964Z",
+    "createdAt": "2026-03-09T05:48:16.210Z"
+  },
+  "currentUrl": "https://lrm-main.vercel.app/dashboard",
+  "currentStep": 0,
+  "lastThought": "",
+  "lastAudit": "",
+  "evidence": null,
+  "bug": null,
+  "success": {
+    "summary": "UI/UX scan completed across 0 page(s). Passed on 0 device(s), failed on 0 device(s). No failing devices detected."
+  },
+  "frame": null,
+  "currentHighlight": null,
+  "gateState": "READY",
+  "primaryBlocker": {
+    "type": "USER_STOPPED",
+    "confidence": 1,
+    "rationale": "Run stop requested by user."
+  },
+  "outcome": {
+    "targetAchieved": false,
+    "blockers": [
+      {
+        "type": "USER_STOPPED",
+        "confidence": 1,
+        "rationale": "Run stop requested by user."
+      }
+    ],
+    "evidenceQualityScore": 0.92,
+    "nextBestAction": "STOPPED_BY_USER"
+  },
+  "summary": "Run stop requested by user.",
+  "effectiveBudgets": {
+    "generic": {
+      "timeBudgetMs": 600000,
+      "maxSteps": 18,
+      "stagnationLimit": 3,
+      "actionRetryCount": 3
+    },
+    "uiux": {
+      "mode": "uiux",
+      "timeBudgetMs": 600000,
+      "maxPages": 24,
+      "maxInteractionsPerPage": 6,
+      "checkCount": 39,
+      "deviceMode": "quick",
+      "deviceSelection": "cap",
+      "deviceCount": 3,
+      "startedAt": "2026-03-09T18:49:13.914Z"
+    }
+  },
+  "runSummary": {
+    "outcome": "STOPPED",
+    "primaryBlocker": {
+      "type": "USER_STOPPED",
+      "confidence": 1,
+      "rationale": "Run stop requested by user."
+    },
+    "nextBestAction": "STOPPED_BY_USER",
+    "evidenceQualityScore": 0.92,
+    "targetAchieved": false
+  },
+  "loginAssist": {
+    "state": "STOP_REQUESTED",
+    "domain": "lrm-main.vercel.app",
+    "hint": "Credentials were submitted to the active login form. Waiting for authentication transition.",
+    "startedAt": "2026-03-09T18:49:15.510Z",
+    "timeoutMs": 180000,
+    "remainingMs": 146499,
+    "resumedAt": "2026-03-09T18:49:52.019Z",
+    "endedAt": null,
+    "resumeTargetUrl": "https://lrm-main.vercel.app/",
+    "resumeCheckpoint": {
+      "mode": "uiux",
+      "step": 0,
+      "url": "https://lrm-main.vercel.app/"
+    },
+    "resumeRequestedAt": "2026-03-09T19:10:07.415Z"
+  },
+  "authAssist": {
+    "state": "auth_failed",
+    "code": "RUN_STOPPED",
+    "source": "manual",
+    "reason": "Run stop requested by user.",
+    "site": "lrm-main.vercel.app",
+    "pageUrl": "https://lrm-main.vercel.app/dashboard",
+    "loginRequired": true,
+    "form": {
+      "identifierFieldDetected": false,
+      "usernameFieldDetected": false,
+      "passwordFieldDetected": false,
+      "otpFieldDetected": false,
+      "submitControlDetected": false,
+      "identifierFilled": true,
+      "usernameFilled": true,
+      "passwordFilled": true,
+      "submitTriggered": true,
+      "submitControlType": "none",
+      "postSubmitUrlChanged": true,
+      "postSubmitProbeState": "unknown",
+      "visibleStep": "unknown",
+      "identifierFieldVisibleCount": 0,
+      "identifierLabelCandidates": [],
+      "usernameFieldVisibleCount": 0,
+      "passwordFieldVisibleCount": 0,
+      "otpFieldVisibleCount": 0,
+      "nextRecommendedAction": "WAIT_FOR_LOGIN"
+    },
+    "runtime": {
+      "browserActionExecuted": true,
+      "identifierFilled": true,
+      "usernameFilled": true,
+      "passwordFilled": true,
+      "submitTriggered": true,
+      "submitControlType": "none",
+      "postSubmitUrlChanged": true,
+      "postSubmitProbeState": "unknown"
+    },
+    "startedAt": "2026-03-09T18:49:15.510Z",
+    "timeoutMs": 180000,
+    "remainingMs": 146499,
+    "endedAt": "2026-03-09T19:10:07.418Z",
+    "resumedAt": "2026-03-09T18:49:52.019Z",
+    "resumeTargetUrl": "https://lrm-main.vercel.app/",
+    "resumeCheckpoint": {
+      "mode": "uiux",
+      "step": 0,
+      "url": "https://lrm-main.vercel.app/"
+    },
+    "profileTag": "",
+    "submitAttempted": true,
+    "resumeTriggered": false,
+    "updatedAt": "2026-03-09T19:10:07.418Z",
+    "resumeRequestedAt": "2026-03-09T19:10:07.415Z"
+  },
+  "testCaseStats": {
+    "planned": 3024,
+    "discovered": 0,
+    "completed": 0,
+    "failed": 0,
+    "passed": 0,
+    "startedAt": "2026-03-09T18:49:11.518Z",
+    "updatedAt": "2026-03-09T18:49:11.521Z"
+  },
+  "testCases": [],
+  "history": [],
+  "timeline": [
+    {
+      "type": "uiux-budget",
+      "message": "UI/UX effective budget: timeBudgetMs=600000, maxPages=24, maxInteractionsPerPage=6, devices=3, checks=39.",
+      "at": "2026-03-09T18:49:13.914Z"
+    },
+    {
+      "type": "auth-assist",
+      "message": "Authentication required for lrm-main.vercel.app. Awaiting secure dashboard input.",
+      "at": "2026-03-09T18:49:15.511Z"
+    },
+    {
+      "type": "auth-assist",
+      "message": "Resume check requested; re-validating authentication state.",
+      "at": "2026-03-09T18:49:49.009Z"
+    },
+    {
+      "type": "auth-assist",
+      "message": "Authentication validated for lrm-main.vercel.app; resuming run at https://lrm-main.vercel.app/.",
+      "at": "2026-03-09T18:49:52.019Z"
+    },
+    {
+      "type": "success",
+      "message": "UI/UX scan completed across 0 page(s). Passed on 0 device(s), failed on 0 device(s). No failing devices detected.",
+      "at": "2026-03-09T18:49:52.042Z"
+    },
+    {
+      "type": "auth-assist",
+      "message": "Credential submit runtime: identifierFilled=yes passwordFilled=yes submitTriggered=yes submitControlType=none postSubmitProbeState=unknown postSubmitUrlChanged=yes",
+      "at": "2026-03-09T18:49:52.119Z"
+    },
+    {
+      "type": "auth-assist",
+      "message": "Credentials submitted to active login form. Waiting for auth transition.",
+      "at": "2026-03-09T18:50:01.120Z"
+    },
+    {
+      "type": "stop",
+      "message": "Run stop requested by user.",
+      "at": "2026-03-09T19:10:07.416Z"
+    },
+    {
+      "type": "stopped",
+      "message": "Run stop requested by user.",
+      "at": "2026-03-09T19:10:07.418Z"
+    }
+  ],
+  "observations": [],
+  "incidents": [],
+  "uiux": {
+    "enabled": true,
+    "effectiveBudget": {
+      "mode": "uiux",
+      "timeBudgetMs": 600000,
+      "maxPages": 24,
+      "maxInteractionsPerPage": 6,
+      "checkCount": 39,
+      "deviceMode": "quick",
+      "deviceSelection": "cap",
+      "deviceCount": 3,
+      "startedAt": "2026-03-09T18:49:13.914Z"
+    },
+    "currentCanonicalUrl": null,
+    "pagesVisited": [],
+    "uniqueStateHashes": [],
+    "blockedForFurtherProgress": [],
+    "pageDeviceMatrix": [],
+    "deviceSummary": [],
+    "failingDevices": [],
+    "issues": [],
+    "clusters": [],
+    "interactionsAttempted": 0,
+    "interactionsSkippedBySafety": 0,
+    "artifactsPrunedCount": 0,
+    "artifactsRetainedCount": 0
+  },
+  "accessibility": {
+    "enabled": false,
+    "currentCanonicalUrl": null,
+    "pagesScanned": [],
+    "blockedForFurtherProgress": [],
+    "deviceSummary": [],
+    "failedDevices": [],
+    "issues": [],
+    "clusters": [],
+    "interactionsAttempted": 0,
+    "interactionsSkippedBySafety": 0,
+    "artifactsPrunedCount": 0,
+    "artifactsRetainedCount": 0,
+    "contrastSummary": {
+      "enabled": false,
+      "pagesEvaluated": 0,
+      "sampleLimit": 40,
+      "minRatioNormalText": 4.5,
+      "minRatioLargeText": 3,
+      "sampledCount": 0,
+      "offenderCount": 0,
+      "worstRatio": null,
+      "worstOffenders": []
+    },
+    "textScaleSummary": {
+      "enabled": false,
+      "scales": [
+        1,
+        1.25,
+        1.5
+      ],
+      "pagesEvaluated": 0,
+      "pagesWithBreaks": 0,
+      "breakByScale": [],
+      "worstBreak": null
+    },
+    "reducedMotionSummary": {
+      "enabled": false,
+      "pagesEvaluated": 0,
+      "pagesWithPersistentMotion": 0,
+      "maxLongAnimationCount": 0,
+      "worstCase": null
+    },
+    "formSummary": {
+      "enabled": false,
+      "mode": "observe-only",
+      "safeSubmitTypes": [
+        "search"
+      ],
+      "pagesEvaluated": 0,
+      "controlsObserved": 0,
+      "visibleErrorsObserved": 0,
+      "requiredNotAnnouncedCount": 0,
+      "errorNotAssociatedCount": 0,
+      "errorNotAnnouncedCount": 0,
+      "describedByMissingTargetCount": 0,
+      "invalidFieldNotFocusedCount": 0,
+      "safeSubmitAttempts": 0,
+      "safeSubmitSkips": 0,
+      "sampleFieldSelectors": []
+    }
+  },
+  "functional": {
+    "enabled": false,
+    "flowsRun": 0,
+    "flows": [],
+    "assertionCounts": {
+      "evaluated": 0,
+      "passed": 0,
+      "failed": 0
+    },
+    "deviceSummary": [],
+    "issues": [],
+    "blockers": [],
+    "blockerTimeline": [],
+    "resumePoints": [],
+    "loginAssist": {
+      "attempted": false,
+      "success": false,
+      "timeout": false,
+      "resumeStrategy": "restart-flow",
+      "profileTag": ""
+    },
+    "summary": "",
+    "reproBundles": [],
+    "contractSummary": {
+      "snapshotsObserved": 0,
+      "apiCallsObserved": 0,
+      "apiErrorCounts": {
+        "4xx": 0,
+        "5xx": 0,
+        "timeouts": 0
+      },
+      "topFailingEndpoints": [],
+      "stepsWithApi5xx": 0,
+      "stepsWithGraphqlErrors": 0,
+      "stepsWithThirdPartyFailures": 0,
+      "failingAssertionCounts": {},
+      "config": {
+        "failOnApi5xx": true,
+        "warnOnThirdPartyFailures": true,
+        "endpointAllowlistPatterns": [],
+        "endpointBlocklistPatterns": []
+      }
+    },
+    "baselineDiff": null,
+    "graph": {
+      "nodes": [],
+      "edges": []
+    }
+  },
+  "steps": [],
+  "artifactIndex": {
+    "frames": [],
+    "dom": [],
+    "a11y": [],
+    "console": [],
+    "network": [],
+    "downloads": [],
+    "har": null,
+    "trace": null,
+    "video": []
+  },
+  "graph": {
+    "nodes": [],
+    "edges": []
+  },
+  "crawler": {
+    "mode": false,
+    "actionBudget": 18,
+    "startAt": "2026-03-09T18:49:11.518Z"
+  },
+  "report": {
+    "sessionId": "qa_8ca11b98",
+    "summary": "Run stop requested by user.",
+    "effectiveBudgets": {
+      "generic": {
+        "timeBudgetMs": 600000,
+        "maxSteps": 18,
+        "stagnationLimit": 3,
+        "actionRetryCount": 3
+      },
+      "uiux": {
+        "mode": "uiux",
+        "timeBudgetMs": 600000,
+        "maxPages": 24,
+        "maxInteractionsPerPage": 6,
+        "checkCount": 39,
+        "deviceMode": "quick",
+        "deviceSelection": "cap",
+        "deviceCount": 3,
+        "startedAt": "2026-03-09T18:49:13.914Z"
+      }
+    },
+    "outcome": "STOPPED",
+    "targetAchieved": false,
+    "blockers": [
+      {
+        "type": "USER_STOPPED",
+        "confidence": 1,
+        "rationale": "Run stop requested by user."
+      }
+    ],
+    "primaryBlocker": {
+      "type": "USER_STOPPED",
+      "confidence": 1,
+      "rationale": "Run stop requested by user."
+    },
+    "nextBestAction": "STOPPED_BY_USER",
+    "evidenceQualityScore": 0.92,
+    "runConfig": {
+      "startUrl": "https://lrm-main.vercel.app",
+      "goal": "uiux scan for https://lrm-main.vercel.app",
+      "testMode": "uiux",
+      "providerMode": "auto",
+      "profileTag": "",
+      "crawlerMode": false,
+      "budgets": {
+        "maxSteps": 18,
+        "timeBudgetMs": 600000,
+        "stagnationLimit": 3,
+        "actionRetryCount": 3
+      },
+      "artifacts": {
+        "captureHtml": false,
+        "captureA11ySnapshot": false,
+        "captureHar": false,
+        "captureTraceOnFail": false,
+        "captureVideo": "fail-only"
+      },
+      "safety": {
+        "allowlistDomains": [],
+        "blocklistDomains": [],
+        "destructiveActionPolicy": "strict",
+        "paymentWallStop": true
+      },
+      "exploration": {
+        "strategy": "coverage-driven",
+        "depthLimit": 6,
+        "urlFrontierEnabled": true,
+        "canonicalizeUrls": true
+      },
+      "readiness": {
+        "uiReadyStrategy": "networkidle-only",
+        "readyTimeoutMs": 10000
+      },
+      "uiux": {
+        "maxPages": 24,
+        "depthLimit": 6,
+        "perDomainCap": 120,
+        "maxInteractionsPerPage": 6,
+        "timeBudgetMs": 600000,
+        "devices": {
+          "mode": "quick",
+          "selection": "cap",
+          "maxDevices": 3,
+          "allowlist": [],
+          "blocklist": [],
+          "includeUserAgents": false
+        },
+        "artifactRetention": {
+          "maxSnapshotsPerViewport": 12,
+          "keepOnlyFailedOrFlaggedSteps": false,
+          "keepDomForIssuesOnly": false
+        },
+        "baseline": {
+          "baselineId": "",
+          "mode": "off"
+        }
+      },
+      "functional": {
+        "strategy": "smoke-pack",
+        "maxFlows": 6,
+        "maxStepsPerFlow": 12,
+        "allowFormSubmit": false,
+        "allowedSubmitTypes": [
+          "search",
+          "filter",
+          "pagination"
+        ],
+        "testDataProfile": "synthetic",
+        "loginAssist": {
+          "enabled": true,
+          "timeoutMs": 180000,
+          "resumeStrategy": "restart-flow"
+        },
+        "capabilities": {
+          "allowNewTabs": true,
+          "allowDownloads": true,
+          "allowUploads": false,
+          "uploadFixturePath": "fixtures/upload.txt"
+        },
+        "readiness": {
+          "strategy": "hybrid",
+          "postClickSettleMs": 800
+        },
+        "profile": {
+          "requireProfileTag": true,
+          "reuseProfileAcrossRuns": true
+        },
+        "assertions": {
+          "failOnConsoleError": true,
+          "failOn5xx": true
+        },
+        "contracts": {
+          "failOnApi5xx": true,
+          "warnOnThirdPartyFailures": true,
+          "endpointAllowlistPatterns": [],
+          "endpointBlocklistPatterns": []
+        },
+        "baseline": {
+          "baselineId": "",
+          "mode": "off"
+        }
+      },
+      "accessibility": {
+        "strategy": "coverage-a11y",
+        "maxPages": 20,
+        "focusProbeTabSteps": 10,
+        "forms": {
+          "enabled": true,
+          "mode": "observe-only",
+          "safeSubmitTypes": [
+            "search"
+          ],
+          "maxValidationAttemptsPerPage": 1
+        },
+        "contrast": {
+          "enabled": true,
+          "sampleLimit": 40,
+          "minRatioNormalText": 4.5,
+          "minRatioLargeText": 3
+        },
+        "textScale": {
+          "enabled": true,
+          "scales": [
+            1,
+            1.25,
+            1.5
+          ]
+        },
+        "reducedMotion": {
+          "enabled": true
+        },
+        "ruleset": "wcag-lite",
+        "failOnCritical": true,
+        "baseline": {
+          "baselineId": "",
+          "mode": "off"
+        }
+      }
+    },
+    "functional": {
+      "enabled": false,
+      "flowsRun": 0,
+      "flows": [],
+      "assertionCounts": {
+        "evaluated": 0,
+        "passed": 0,
+        "failed": 0
+      },
+      "deviceSummary": [],
+      "issues": [],
+      "blockers": [],
+      "blockerTimeline": [],
+      "resumePoints": [],
+      "loginAssist": {
+        "attempted": false,
+        "success": false,
+        "timeout": false,
+        "resumeStrategy": "restart-flow",
+        "profileTag": ""
+      },
+      "summary": "Functional: ran 0 flows, 0 assertions, passed 0, failed 0, blockers 0",
+      "reproBundles": [],
+      "contractSummary": {
+        "snapshotsObserved": 0,
+        "apiCallsObserved": 0,
+        "apiErrorCounts": {
+          "4xx": 0,
+          "5xx": 0,
+          "timeouts": 0
+        },
+        "topFailingEndpoints": [],
+        "stepsWithApi5xx": 0,
+        "stepsWithGraphqlErrors": 0,
+        "stepsWithThirdPartyFailures": 0,
+        "failingAssertionCounts": {},
+        "config": {
+          "failOnApi5xx": true,
+          "warnOnThirdPartyFailures": true,
+          "endpointAllowlistPatterns": [],
+          "endpointBlocklistPatterns": []
+        }
+      },
+      "baselineDiff": null,
+      "graph": {
+        "nodes": [],
+        "edges": []
+      }
+    },
+    "accessibility": {
+      "enabled": false,
+      "currentCanonicalUrl": null,
+      "pagesScanned": [],
+      "blockedForFurtherProgress": [],
+      "deviceSummary": [
+        {
+          "deviceLabel": "desktop",
+          "pagesPassed": 0,
+          "pagesFailed": 0,
+          "totalChecksFailed": 0,
+          "worstSeverity": "P3"
+        }
+      ],
+      "failedDevices": [],
+      "issues": [],
+      "clusters": [],
+      "interactionsAttempted": 0,
+      "interactionsSkippedBySafety": 0,
+      "artifactsPrunedCount": 0,
+      "artifactsRetainedCount": 0,
+      "contrastSummary": {
+        "enabled": false,
+        "pagesEvaluated": 0,
+        "sampleLimit": 40,
+        "minRatioNormalText": 4.5,
+        "minRatioLargeText": 3,
+        "sampledCount": 0,
+        "offenderCount": 0,
+        "worstRatio": null,
+        "worstOffenders": []
+      },
+      "textScaleSummary": {
+        "enabled": false,
+        "scales": [
+          1,
+          1.25,
+          1.5
+        ],
+        "pagesEvaluated": 0,
+        "pagesWithBreaks": 0,
+        "breakByScale": [],
+        "worstBreak": null
+      },
+      "reducedMotionSummary": {
+        "enabled": false,
+        "pagesEvaluated": 0,
+        "pagesWithPersistentMotion": 0,
+        "maxLongAnimationCount": 0,
+        "worstCase": null
+      },
+      "formSummary": {
+        "enabled": false,
+        "mode": "observe-only",
+        "safeSubmitTypes": [
+          "search"
+        ],
+        "pagesEvaluated": 0,
+        "controlsObserved": 0,
+        "visibleErrorsObserved": 0,
+        "requiredNotAnnouncedCount": 0,
+        "errorNotAssociatedCount": 0,
+        "errorNotAnnouncedCount": 0,
+        "describedByMissingTargetCount": 0,
+        "invalidFieldNotFocusedCount": 0,
+        "safeSubmitAttempts": 0,
+        "safeSubmitSkips": 0,
+        "sampleFieldSelectors": []
+      },
+      "summary": {
+        "pagesScanned": 0,
+        "issuesCount": 0,
+        "clustersCount": 0,
+        "severityCounts": {
+          "P0": 0,
+          "P1": 0,
+          "P2": 0,
+          "P3": 0
+        },
+        "ruleCounts": [],
+        "ruleSeverityCounts": [],
+        "keyboardProbeFindingsCount": 0,
+        "deviceSummary": [
+          {
+            "deviceLabel": "desktop",
+            "pagesPassed": 0,
+            "pagesFailed": 0,
+            "totalChecksFailed": 0,
+            "worstSeverity": "P3"
+          }
+        ],
+        "failedDevices": [],
+        "summaryText": "Accessibility: scanned 0 pages across 1 devices; passed on 1 device(s); failed on 0 device(s); top failing rules none.",
+        "contrastSummary": {
+          "enabled": false,
+          "pagesEvaluated": 0,
+          "sampleLimit": 40,
+          "minRatioNormalText": 4.5,
+          "minRatioLargeText": 3,
+          "sampledCount": 0,
+          "offenderCount": 0,
+          "worstRatio": null,
+          "worstOffenders": []
+        },
+        "textScaleSummary": {
+          "enabled": false,
+          "scales": [
+            1,
+            1.25,
+            1.5
+          ],
+          "pagesEvaluated": 0,
+          "pagesWithBreaks": 0,
+          "breakByScale": [],
+          "worstBreak": null
+        },
+        "reducedMotionSummary": {
+          "enabled": false,
+          "pagesEvaluated": 0,
+          "pagesWithPersistentMotion": 0,
+          "maxLongAnimationCount": 0,
+          "worstCase": null
+        },
+        "formSummary": {
+          "enabled": false,
+          "mode": "observe-only",
+          "safeSubmitTypes": [
+            "search"
+          ],
+          "pagesEvaluated": 0,
+          "controlsObserved": 0,
+          "visibleErrorsObserved": 0,
+          "requiredNotAnnouncedCount": 0,
+          "errorNotAssociatedCount": 0,
+          "errorNotAnnouncedCount": 0,
+          "describedByMissingTargetCount": 0,
+          "invalidFieldNotFocusedCount": 0,
+          "safeSubmitAttempts": 0,
+          "safeSubmitSkips": 0,
+          "sampleFieldSelectors": []
+        },
+        "baseline": {
+          "mode": "off",
+          "enabled": false,
+          "hasDiff": false,
+          "newClusters": 0,
+          "resolvedClusters": 0,
+          "severityIncreases": 0,
+          "severityDecreases": 0
+        }
+      },
+      "reproBundles": [],
+      "baselineDiff": null,
+      "focusProbeFindings": []
+    },
+    "accessibilitySummary": {
+      "pagesScanned": 0,
+      "issuesCount": 0,
+      "clustersCount": 0,
+      "severityCounts": {
+        "P0": 0,
+        "P1": 0,
+        "P2": 0,
+        "P3": 0
+      },
+      "ruleCounts": [],
+      "ruleSeverityCounts": [],
+      "keyboardProbeFindingsCount": 0,
+      "deviceSummary": [
+        {
+          "deviceLabel": "desktop",
+          "pagesPassed": 0,
+          "pagesFailed": 0,
+          "totalChecksFailed": 0,
+          "worstSeverity": "P3"
+        }
+      ],
+      "failedDevices": [],
+      "summaryText": "Accessibility: scanned 0 pages across 1 devices; passed on 1 device(s); failed on 0 device(s); top failing rules none.",
+      "contrastSummary": {
+        "enabled": false,
+        "pagesEvaluated": 0,
+        "sampleLimit": 40,
+        "minRatioNormalText": 4.5,
+        "minRatioLargeText": 3,
+        "sampledCount": 0,
+        "offenderCount": 0,
+        "worstRatio": null,
+        "worstOffenders": []
+      },
+      "textScaleSummary": {
+        "enabled": false,
+        "scales": [
+          1,
+          1.25,
+          1.5
+        ],
+        "pagesEvaluated": 0,
+        "pagesWithBreaks": 0,
+        "breakByScale": [],
+        "worstBreak": null
+      },
+      "reducedMotionSummary": {
+        "enabled": false,
+        "pagesEvaluated": 0,
+        "pagesWithPersistentMotion": 0,
+        "maxLongAnimationCount": 0,
+        "worstCase": null
+      },
+      "formSummary": {
+        "enabled": false,
+        "mode": "observe-only",
+        "safeSubmitTypes": [
+          "search"
+        ],
+        "pagesEvaluated": 0,
+        "controlsObserved": 0,
+        "visibleErrorsObserved": 0,
+        "requiredNotAnnouncedCount": 0,
+        "errorNotAssociatedCount": 0,
+        "errorNotAnnouncedCount": 0,
+        "describedByMissingTargetCount": 0,
+        "invalidFieldNotFocusedCount": 0,
+        "safeSubmitAttempts": 0,
+        "safeSubmitSkips": 0,
+        "sampleFieldSelectors": []
+      },
+      "baseline": {
+        "mode": "off",
+        "enabled": false,
+        "hasDiff": false,
+        "newClusters": 0,
+        "resolvedClusters": 0,
+        "severityIncreases": 0,
+        "severityDecreases": 0
+      }
+    },
+    "uiuxSummary": {
+      "pagesVisited": 0,
+      "uniqueStates": 0,
+      "topIssues": [],
+      "byViewport": [],
+      "stateQualityByViewport": [],
+      "coverage": {
+        "uniqueCanonicalUrls": 0,
+        "interactionsAttempted": 0,
+        "interactionsSkippedBySafety": 0
+      },
+      "effectiveBudget": {
+        "mode": "uiux",
+        "timeBudgetMs": 600000,
+        "maxPages": 24,
+        "maxInteractionsPerPage": 6,
+        "checkCount": 39,
+        "deviceMode": "quick",
+        "deviceSelection": "cap",
+        "deviceCount": 3,
+        "startedAt": "2026-03-09T18:49:13.914Z"
+      },
+      "deviceSummary": [],
+      "pageDeviceMatrix": [],
+      "failingDevices": [],
+      "artifacts": {
+        "artifactsPrunedCount": 0,
+        "artifactsRetainedCount": 0,
+        "issueOnlyArtifacts": false
+      },
+      "clusters": {
+        "count": 0
+      },
+      "reproBundles": {
+        "count": 0
+      },
+      "groupedFailures": {
+        "count": 0
+      },
+      "judgmentCounts": {
+        "FAIL": 0,
+        "WARN": 0,
+        "INFO": 0,
+        "PASS": 0
+      },
+      "baseline": {
+        "mode": "off",
+        "enabled": false,
+        "hasDiff": false,
+        "newClusters": 0,
+        "resolvedClusters": 0,
+        "severityIncreases": 0,
+        "severityDecreases": 0
+      }
+    },
+    "uiuxIssues": [],
+    "uiuxGroupedIssues": [],
+    "uiuxClusters": [],
+    "summaryText": {
+      "deterministic": "UI/UX: scanned 0 pages across 0 devices; failed devices 0.",
+      "llm": null,
+      "llmModel": null
+    },
+    "authAssist": {
+      "used": true,
+      "loginRequired": true,
+      "state": "auth_failed",
+      "code": "RUN_STOPPED",
+      "reason": "Run stop requested by user.",
+      "site": "lrm-main.vercel.app",
+      "pageUrl": "https://lrm-main.vercel.app/dashboard",
+      "visibleStep": "unknown",
+      "identifierFieldDetected": false,
+      "identifierFieldVisibleCount": 0,
+      "identifierLabelCandidates": [],
+      "nextRecommendedAction": "WAIT_FOR_LOGIN",
+      "submitAttempted": true,
+      "resumeTriggered": false,
+      "submitTriggered": true,
+      "submitControlType": "none",
+      "identifierFilled": true,
+      "passwordFilled": true,
+      "postSubmitUrlChanged": true,
+      "postSubmitProbeState": "unknown",
+      "success": false,
+      "failure": true,
+      "resumedFromLoginAssist": false,
+      "authSuccessDetected": false,
+      "resumeTargetUrl": "https://lrm-main.vercel.app/",
+      "resumeCheckpoint": {
+        "mode": "uiux",
+        "step": 0,
+        "url": "https://lrm-main.vercel.app/"
+      },
+      "profileTag": ""
+    },
+    "uiux": {
+      "summary": {
+        "pagesVisited": 0,
+        "uniqueStates": 0,
+        "topIssues": [],
+        "byViewport": [],
+        "stateQualityByViewport": [],
+        "coverage": {
+          "uniqueCanonicalUrls": 0,
+          "interactionsAttempted": 0,
+          "interactionsSkippedBySafety": 0
+        },
+        "effectiveBudget": {
+          "mode": "uiux",
+          "timeBudgetMs": 600000,
+          "maxPages": 24,
+          "maxInteractionsPerPage": 6,
+          "checkCount": 39,
+          "deviceMode": "quick",
+          "deviceSelection": "cap",
+          "deviceCount": 3,
+          "startedAt": "2026-03-09T18:49:13.914Z"
+        },
+        "deviceSummary": [],
+        "pageDeviceMatrix": [],
+        "failingDevices": [],
+        "artifacts": {
+          "artifactsPrunedCount": 0,
+          "artifactsRetainedCount": 0,
+          "issueOnlyArtifacts": false
+        },
+        "clusters": {
+          "count": 0
+        },
+        "reproBundles": {
+          "count": 0
+        },
+        "groupedFailures": {
+          "count": 0
+        },
+        "judgmentCounts": {
+          "FAIL": 0,
+          "WARN": 0,
+          "INFO": 0,
+          "PASS": 0
+        },
+        "baseline": {
+          "mode": "off",
+          "enabled": false,
+          "hasDiff": false,
+          "newClusters": 0,
+          "resolvedClusters": 0,
+          "severityIncreases": 0,
+          "severityDecreases": 0
+        }
+      },
+      "issues": [],
+      "groupedIssues": [],
+      "clusters": [],
+      "reproBundles": [],
+      "baselineDiff": null,
+      "deviceSummary": [],
+      "pageDeviceMatrix": [],
+      "failingDevices": []
+    },
+    "artifacts": {
+      "frames": [],
+      "dom": [],
+      "a11y": [],
+      "console": [],
+      "network": [],
+      "downloads": [],
+      "har": null,
+      "trace": null,
+      "video": []
+    },
+    "timeline": [
+      {
+        "type": "uiux-budget",
+        "message": "UI/UX effective budget: timeBudgetMs=600000, maxPages=24, maxInteractionsPerPage=6, devices=3, checks=39.",
+        "at": "2026-03-09T18:49:13.914Z"
+      },
+      {
+        "type": "auth-assist",
+        "message": "Authentication required for lrm-main.vercel.app. Awaiting secure dashboard input.",
+        "at": "2026-03-09T18:49:15.511Z"
+      },
+      {
+        "type": "auth-assist",
+        "message": "Resume check requested; re-validating authentication state.",
+        "at": "2026-03-09T18:49:49.009Z"
+      },
+      {
+        "type": "auth-assist",
+        "message": "Authentication validated for lrm-main.vercel.app; resuming run at https://lrm-main.vercel.app/.",
+        "at": "2026-03-09T18:49:52.019Z"
+      },
+      {
+        "type": "success",
+        "message": "UI/UX scan completed across 0 page(s). Passed on 0 device(s), failed on 0 device(s). No failing devices detected.",
+        "at": "2026-03-09T18:49:52.042Z"
+      },
+      {
+        "type": "auth-assist",
+        "message": "Credential submit runtime: identifierFilled=yes passwordFilled=yes submitTriggered=yes submitControlType=none postSubmitProbeState=unknown postSubmitUrlChanged=yes",
+        "at": "2026-03-09T18:49:52.119Z"
+      },
+      {
+        "type": "auth-assist",
+        "message": "Credentials submitted to active login form. Waiting for auth transition.",
+        "at": "2026-03-09T18:50:01.120Z"
+      },
+      {
+        "type": "stop",
+        "message": "Run stop requested by user.",
+        "at": "2026-03-09T19:10:07.416Z"
+      },
+      {
+        "type": "stopped",
+        "message": "Run stop requested by user.",
+        "at": "2026-03-09T19:10:07.418Z"
+      }
+    ],
+    "incidents": [],
+    "observations": [],
+    "reproducibleSteps": [],
+    "markdown": "# Run Report\n\n- Session: qa_8ca11b98\n- Outcome: STOPPED\n- Goal: uiux scan for https://lrm-main.vercel.app\n- Mode: uiux\n- URL: https://lrm-main.vercel.app/dashboard\n- Primary blocker: USER_STOPPED (100%)\n\n## Timeline\n- 2026-03-09T18:49:13.914Z: [uiux-budget] UI/UX effective budget: timeBudgetMs=600000, maxPages=24, maxInteractionsPerPage=6, devices=3, checks=39.\n- 2026-03-09T18:49:15.511Z: [auth-assist] Authentication required for lrm-main.vercel.app. Awaiting secure dashboard input.\n- 2026-03-09T18:49:49.009Z: [auth-assist] Resume check requested; re-validating authentication state.\n- 2026-03-09T18:49:52.019Z: [auth-assist] Authentication validated for lrm-main.vercel.app; resuming run at https://lrm-main.vercel.app/.\n- 2026-03-09T18:49:52.042Z: [success] UI/UX scan completed across 0 page(s). Passed on 0 device(s), failed on 0 device(s). No failing devices detected.\n- 2026-03-09T18:49:52.119Z: [auth-assist] Credential submit runtime: identifierFilled=yes passwordFilled=yes submitTriggered=yes submitControlType=none postSubmitProbeState=unknown postSubmitUrlChanged=yes\n- 2026-03-09T18:50:01.120Z: [auth-assist] Credentials submitted to active login form. Waiting for auth transition.\n- 2026-03-09T19:10:07.416Z: [stop] Run stop requested by user.\n- 2026-03-09T19:10:07.418Z: [stopped] Run stop requested by user.\n\n## Incidents\n- No incidents recorded.\n\n## Artifacts\n- No indexed artifacts recorded.\n\n## UI/UX Summary\n- Pages visited: 0\n- Unique states: 0\n- Unique canonical URLs: 0\n- Effective time budget: 600000 ms\n- Effective max pages: 24\n- Effective max interactions/page: 6\n- Effective devices: 3\n- Interactions attempted: 0\n- Interactions skipped by safety: 0\n- Devices scanned: 0\n- Devices with failures: 0\n- Artifacts retained: 0\n- Artifacts pruned: 0\n- Issue-only artifacts policy: disabled\n- Issue clusters: 0\n- Grouped failures: 0\n- Repro bundles: 0\n\n## Accessibility Summary\n- Pages scanned: 0\n- Accessibility issues: 0\n- Accessibility clusters: 0\n- P1 issues: 0\n- P2 issues: 0\n- Keyboard probe findings: 0\n\n## Functional Summary\n- Flows run: 0\n- Functional issues: 0\n- Functional blockers: 0\n- Blocker timeline entries: 0\n- Resume points: 0\n- Login assist attempted: no\n- API calls observed: 0\n- API 5xx count: 0\n- Functional summary: Functional: ran 0 flows, 0 assertions, passed 0, failed 0, blockers 0\n"
+  }
+}

@@ -1,0 +1,518 @@
+{
+  "cookies": [
+    {
+      "name": "YSC",
+      "value": "PcdORwh1SmE",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "VISITOR_INFO1_LIVE",
+      "value": "QotakaLsxEI",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1788501436.553457,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "VISITOR_PRIVACY_METADATA",
+      "value": "CgJVUxIEGgAgGA%3D%3D",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1788501436.553485,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "PREF",
+      "value": "tz=America.New_York&f4=10000",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1807509437.611443,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gcl_au",
+      "value": "1.1.358432383.1772761099",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1780537099,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_5JSYX2Q357",
+      "value": "GS2.1.s1772761098$o1$g1$t1772761111$j47$l0$h0",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1807321111.113335,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "IDE",
+      "value": "AHWqTUlx2qntkV7a0yz7JtDCMoJdSRM6dofwxTa0E14senV71kEjfJaSpnw_0sawbzg",
+      "domain": ".doubleclick.net",
+      "path": "/",
+      "expires": 1807321114.713009,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_ga_VCGEPY40VB",
+      "value": "GS2.1.s1772761114$o1$g1$t1772761139$j35$l0$h0",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1807321139.211831,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_H30R9PNQFN",
+      "value": "GS2.1.s1772761145$o1$g0$t1772761145$j60$l0$h0",
+      "domain": ".support.google.com",
+      "path": "/",
+      "expires": 1807321145.498029,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.3.1932208521.1772761145",
+      "domain": ".support.google.com",
+      "path": "/",
+      "expires": 1807321145.557306,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.1.790218454.1772761162",
+      "domain": ".about.youtube",
+      "path": "/",
+      "expires": 1807321167.119701,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_2L2E9R1WPQ",
+      "value": "GS2.1.s1772761162$o1$g1$t1772761168$j54$l0$h0",
+      "domain": ".about.youtube",
+      "path": "/",
+      "expires": 1807321168.732085,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.3.664268004.1772761174",
+      "domain": ".transparencyreport.google.com",
+      "path": "/",
+      "expires": 1807321174.728486,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.1.1879712903.1772761177",
+      "domain": ".blog.youtube",
+      "path": "/",
+      "expires": 1807321211.519997,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_XQYF1YFYZF",
+      "value": "GS2.1.s1772761174$o1$g0$t1772761179$j55$l0$h0",
+      "domain": ".transparencyreport.google.com",
+      "path": "/",
+      "expires": 1807321179.996906,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_8LV49FDYJ3",
+      "value": "GS2.1.s1772761176$o1$g1$t1772761213$j23$l0$h0",
+      "domain": ".blog.youtube",
+      "path": "/",
+      "expires": 1807321213.390382,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_M0180HEFCY",
+      "value": "GS2.1.s1772761168$o1$g1$t1772761234$j60$l0$h0",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1807321234.527529,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.1.1622049867.1772761099",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1807321255.44999,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_HTXKR35SN9",
+      "value": "GS2.1.s1772761255$o1$g1$t1772761255$j60$l0$h0",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1807321255.466257,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__Secure-YNID",
+      "value": "16.YT=x4LQP3xMVWsB3VPRT3pZ0gSsVrR3B0Tv4OWSnTUy-PuHhaPLBYbcqJqrvPF8TbXWntOzm7mSpAwbhYwsJz8cH290xknc5EUs98D1-3lWzt9rOoCR1dnzE391cmsZCbLhrhyiWfF4GV9sTXxKrmQmALE0Al-vpHW4LKkbyOdyAXEbSTim2ehAS8BUp3y_ZjtDP6D3I2BthInJ6pDsD-G4Lcd9njKnZFSETBFT-B2l8feyRo0QTTGcHZsJJHsyG0Eqi_uW4McljiYsSMlMDkw0LLMYASN8OGbWnOtZLEd0mW05TjNTM-b5OURLZW-lDp6D9F9b2N9MW-MoUZY6WBxZlQ",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1788501139.571585,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://youtube.com",
+      "_crHasCrossSiteAncestor": false
+    },
+    {
+      "name": "GPS",
+      "value": "1",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1772950939.571902,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__Secure-ROLLOUT_TOKEN",
+      "value": "CO3Nm5fLuPqyggEQmKWyzoGKkwMYmJGrnc6PkwM%3D",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1788501139.571992,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://youtube.com",
+      "_crHasCrossSiteAncestor": false
+    },
+    {
+      "name": "__Host-GAPS",
+      "value": "1:K46XTDAQOd4X1pxt3eNEpW_KMS_mNQ:Qt3dPTXgaqldM5cO",
+      "domain": "accounts.google.com",
+      "path": "/",
+      "expires": 1807509153.784449,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "NID",
+      "value": "529=zx7hlGLCBg81Q2zSzcJ8chswo8d10r6VOOwxlLkawCYUms9q_aSjJpd2loHIG6Xzo2pZJn9twlovw5VhXrkQHmNJ1ZmcKgCV2_O3MEijC02ff8CR4YRJNCkA0QiFLoo7phRLiKZjFW14GWUMU1rNXqmB2enDia-G78GvJr8SiQH3ahMLt8Z9dy8-2_qVr3qHPCsZOpTfsAd_-NfrRySfu1RBXoc-hVzg8NgYFki4Dkc4jRnvbcUieyqXX_9ojgI",
+      "domain": ".google.com",
+      "path": "/",
+      "expires": 1788760353.784483,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "CONSISTENCY",
+      "value": "AG2Tqf_6H43_LwhIB5YHWIw2pwVlATbNukILMOeqfEU9bo7V3C7VuISmykTE0vig6TnPIdegNeFCgMnLrY3TDZsi7wgGq_hVD9rO_jmiB3QxDOEF2LuWsgU",
+      "domain": ".youtube.com",
+      "path": "/",
+      "expires": 1772949757,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__cf_bm",
+      "value": "PlN8w5Fz1u99KzY0WXjhi_X_dSAi8la3JjSUD3s7Khs-1772949299.9415417-1.0.1.1-tSlyar6KgnDGhdFQKKJ2VyCKo83KngAt0cFRbFEQpr9KuhobP.CER10_uikktfWLEcRFoPpLNFBIBloODE3phqDaNcrFb6HlodqF0Jw5VJ7HTV_EnSMKDfpZV_OdK4aJ",
+      "domain": ".discord.gg",
+      "path": "/",
+      "expires": 1772951099.94004,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__dcfduid",
+      "value": "57e883801ab311f18106f17e72e99b3f",
+      "domain": "discord.com",
+      "path": "/",
+      "expires": 1807509300.154873,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__sdcfduid",
+      "value": "57e883811ab311f18106f17e72e99b3fc10600704b8b17232ff3efb2908fe3cfc70a99e13f8f262c8fa2ca679ac901fb",
+      "domain": "discord.com",
+      "path": "/",
+      "expires": 1807509300.154941,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_cfuvid",
+      "value": "iwTLadPGlC5AbxHiFb5PGR_oPDUTAx4MLWIj4QEd.rA-1772949302.4415662-1.0.1.1-S.hOjpPQpffNYr2QfKuFB9CyHZyZebl603O8qmQjVmk",
+      "domain": ".discord.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "cf_clearance",
+      "value": "mkDmgTvNeMJ6xv0cHw9Gc7SE8loY28yOY6TnpxB.IQs-1772949433-1.2.1.1-vG3CxLkIB3lqKy7w7xVxAsdr4ZsNW9Mm2Z5vVIHrX48xYLRc99_DACQXGqbc1HrXWhOC._RxWBLTVEN00nO2IegxGOvJCQKnORUNz7kI4j1r81axFV718xK25zxLRNKyyDrksjLR3ZDKSzaFnzH69550CPHsWOj2WtV40uqC23jbk4w02l14wth5CDPD8OQB2T75A8GjFiWKj5LGP_kq8BEvKpdMQz3.EO8m0.u6T94",
+      "domain": ".discord.com",
+      "path": "/",
+      "expires": 1804485433.61992,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://discord.com",
+      "_crHasCrossSiteAncestor": false
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.youtube.com",
+      "localStorage": [
+        {
+          "name": "yt-player-volume",
+          "value": "{\"data\":\"{\\\"volume\\\":100,\\\"muted\\\":true}\",\"expiration\":1775353074456,\"creation\":1772761074456}"
+        },
+        {
+          "name": "ytidb::LAST_RESULT_ENTRY_KEY",
+          "value": "{\"data\":{\"hasSucceededOnce\":true},\"expiration\":1775541437613,\"creation\":1772949437614}"
+        },
+        {
+          "name": "yt-player-bandwidth",
+          "value": "{\"data\":\"{\\\"delay\\\":0.063199951171875,\\\"stall\\\":0,\\\"byterate\\\":12575606.53035046,\\\"init\\\":1772949156517.8,\\\"interruptions\\\":[{\\\"stamp\\\":1772949600000,\\\"net\\\":187,\\\"max\\\":0}]}\",\"expiration\":1775541158145,\"creation\":1772949158145}"
+        },
+        {
+          "name": "yt-icons-last-purged",
+          "value": "1772760990088"
+        },
+        {
+          "name": "yt-player-user-settings",
+          "value": "{\"data\":\"{\\\"484\\\":{\\\"stringValue\\\":\\\"\\\"}}\",\"expiration\":1775541436951,\"creation\":1772949436951}"
+        },
+        {
+          "name": "_gcl_ls",
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gcl_ctr\":{\"value\":{\"value\":1,\"timeouts\":0,\"errors\":0,\"creationTimeMs\":1772761114567},\"expires\":1780537114567}}"
+        },
+        {
+          "name": "Vd9445516||::yt-player::yt-player-lv",
+          "value": "{\"data\":\"{}\",\"creation\":1772949437812}"
+        },
+        {
+          "name": "yt-remote-connected-devices",
+          "value": "{\"data\":\"[]\",\"expiration\":1773035837784,\"creation\":1772949437784}"
+        },
+        {
+          "name": "yt-remote-device-id",
+          "value": "{\"data\":\"996c7580-c1c5-41b0-b767-365ff3b1e0d7\",\"expiration\":1804292775308,\"creation\":1772756775308}"
+        }
+      ]
+    },
+    {
+      "origin": "https://discord.com",
+      "localStorage": [
+        {
+          "name": "fingerprint",
+          "value": "\"1480081387150377145.29Xj5x9qH_b8E9IuIUMon8LSTXI\""
+        },
+        {
+          "name": "StreamerModeStore",
+          "value": "{\"_state\":{},\"_version\":1}"
+        },
+        {
+          "name": "keyboard-layout-map",
+          "value": "{\"0\":48,\"1\":49,\"2\":50,\"3\":51,\"4\":52,\"5\":53,\"6\":54,\"7\":55,\"8\":56,\"9\":57,\"backspace\":8,\"tab\":9,\"enter\":13,\"shift\":16,\"ctrl\":17,\"alt\":18,\"pause/break\":19,\"caps lock\":20,\"esc\":27,\"space\":32,\"page up\":33,\"page down\":34,\"end\":35,\"home\":36,\"left\":37,\"up\":38,\"right\":39,\"down\":40,\"insert\":45,\"delete\":46,\"command\":91,\"left command\":91,\"right command\":93,\"numpad *\":106,\"numpad +\":107,\"numpad -\":109,\"numpad .\":110,\"numpad /\":111,\"num lock\":144,\"scroll lock\":145,\"my computer\":182,\"my calculator\":183,\";\":186,\"=\":187,\",\":188,\"-\":189,\".\":190,\"/\":191,\"`\":192,\"[\":219,\"\\\\\":220,\"]\":221,\"'\":222,\"a\":65,\"b\":66,\"c\":67,\"d\":68,\"e\":69,\"f\":70,\"g\":71,\"h\":72,\"i\":73,\"j\":74,\"k\":75,\"l\":76,\"m\":77,\"n\":78,\"o\":79,\"p\":80,\"q\":81,\"r\":82,\"s\":83,\"t\":84,\"u\":85,\"v\":86,\"w\":87,\"x\":88,\"y\":89,\"z\":90,\"f1\":112,\"f2\":113,\"f3\":114,\"f4\":115,\"f5\":116,\"f6\":117,\"f7\":118,\"f8\":119,\"f9\":120,\"f10\":121,\"f11\":122,\"f12\":123,\"numpad 0\":96,\"numpad 1\":97,\"numpad 2\":98,\"numpad 3\":99,\"numpad 4\":100,\"numpad 5\":101,\"numpad 6\":102,\"numpad 7\":103,\"numpad 8\":104,\"numpad 9\":105,\"windows\":91,\"⇧\":16,\"⌥\":18,\"⌃\":17,\"⌘\":91,\"ctl\":17,\"control\":17,\"option\":18,\"pause\":19,\"break\":19,\"caps\":20,\"return\":13,\"escape\":27,\"spc\":32,\"spacebar\":32,\"pgup\":33,\"pgdn\":34,\"ins\":45,\"del\":46,\"cmd\":91}"
+        },
+        {
+          "name": "UserSettingsOverridesStore",
+          "value": "{\"_state\":{},\"_version\":1}"
+        },
+        {
+          "name": "UnsyncedUserSettingsStore",
+          "value": "{\"_state\":{\"darkSidebar\":false,\"hdrDynamicRange\":\"no-limit\"},\"_version\":2}"
+        },
+        {
+          "name": "HangStatusStore",
+          "value": "{\"_state\":{\"recentStatuses\":[\"chilling\",\"gaming\",\"focusing\",\"brb\",\"watching\"],\"favoritedStatuses\":[],\"currentDefaultStatus\":null},\"_version\":3}"
+        },
+        {
+          "name": "OverlayStore6",
+          "value": "{\"legacyEnabled\":false,\"oopEnabled\":false}"
+        },
+        {
+          "name": "MultiAccountStore",
+          "value": "{\"_state\":{\"users\":[],\"canUseMultiAccountMobile\":false},\"_version\":1}"
+        },
+        {
+          "name": "RTCRegionStore",
+          "value": "{\"_state\":{\"preferredRegions\":null},\"_version\":1}"
+        },
+        {
+          "name": "DeviceFrecencyStore",
+          "value": "{\"_state\":{\"audioinput\":{},\"audiooutput\":{},\"videoinput\":{}},\"_version\":1}"
+        },
+        {
+          "name": "scientist:triggered",
+          "value": "{\"v\":1,\"e\":{\"user|2025-07_desktop_high_contrast_mode|RootThemeContextProvider\":{\"time\":1772949302080,\"hash\":3695065393}}}"
+        },
+        {
+          "name": "OverridePremiumTypeStore",
+          "value": "{\"_state\":{},\"_version\":1}"
+        },
+        {
+          "name": "hotspots",
+          "value": "{\"_state\":{\"hiddenHotspots\":[],\"hotspotOverrides\":{}},\"_version\":1}"
+        },
+        {
+          "name": "AccessibilityStore",
+          "value": "{\"_state\":{\"fontSize\":16,\"zoom\":100,\"keyboardModeEnabled\":false,\"contrastMode\":\"default\",\"colorblindMode\":false,\"lowContrastMode\":false,\"saturation\":1,\"contrast\":1,\"desaturateUserColors\":false,\"forcedColorsModalSeen\":false,\"keyboardNavigationExplainerModalSeen\":false,\"messageGroupSpacing\":null,\"systemPrefersReducedMotion\":\"no-preference\",\"systemPrefersCrossfades\":false,\"prefersReducedMotion\":\"auto\",\"systemForcedColors\":\"none\",\"syncForcedColors\":true,\"systemPrefersContrast\":\"no-preference\",\"alwaysShowLinkDecorations\":false,\"roleStyle\":\"username\",\"displayNameStylesEnabled\":true,\"submitButtonEnabled\":false,\"syncProfileThemeWithUserTheme\":false,\"enableCustomCursor\":true,\"switchIconsEnabled\":false,\"darkSidebar\":false},\"_version\":10}"
+        },
+        {
+          "name": "PictureInPictureStore",
+          "value": "{\"_state\":{\"openPosition\":\"bottom-right\",\"pipWidths\":{\"0\":320,\"1\":160,\"2\":320}},\"_version\":1}"
+        },
+        {
+          "name": "PremiumGiftingIntentStore",
+          "value": "{\"_state\":{\"messageGiftIntentLastShownMap\":{},\"lastShownFriendsListGiftIntents\":[],\"friendsTabBadgeLastDismissedTime\":null,\"giftUnreadNotificationLastDismissedTimes\":[],\"profilePopoutGiftIntentsDismissMap\":{}},\"_version\":3}"
+        },
+        {
+          "name": "SelectivelySyncedUserSettingsStore",
+          "value": "{\"_state\":{},\"_version\":2}"
+        },
+        {
+          "name": "GameStore",
+          "value": "{\"_state\":{\"detectableGamesEtag\":\"\",\"detectableGames\":[],\"blocklistEtag\":\"\",\"blocklistExecutables\":[],\"blocklistPatterns\":[]},\"_version\":4}"
+        },
+        {
+          "name": "NewlyAddedEmojiStore",
+          "value": "{\"_state\":{\"lastSeenNewlyAddedEmojiIds\":{}},\"_version\":1}"
+        },
+        {
+          "name": "QuickSwitcherStore",
+          "value": "{\"_state\":{\"channelHistory\":[]},\"_version\":0}"
+        },
+        {
+          "name": "GuildPowerupsStore",
+          "value": "{\"_state\":{},\"_version\":1}"
+        },
+        {
+          "name": "DismissibleContentFrameworkStore",
+          "value": "{\"_state\":{\"numberOfDCsShownToday\":0,\"dismissibleContentSeenDuringSession\":[],\"dailyCapOverridden\":false,\"newUserMinAgeRequiredOverridden\":false,\"renderedAtTimestamps\":[],\"lastDismissed\":null,\"seenForGuildId\":[]},\"_version\":1}"
+        },
+        {
+          "name": "DeveloperActivityShelfStore",
+          "value": "{\"_state\":{\"lastUsedObject\":{},\"useActivityUrlOverride\":false,\"activityUrlOverride\":null,\"filter\":\"\"},\"_version\":1}"
+        },
+        {
+          "name": "ClipsStore",
+          "value": "{\"_state\":{\"clipsSettings\":{\"clipsEnabled\":false,\"storageLocation\":\"default\",\"clipsQuality\":{\"resolution\":1080,\"frameRate\":30},\"clipsLength\":30000,\"remindersEnabled\":true,\"decoupledClipsEnabled\":false,\"viewerClipsEnabled\":true,\"viewerConnectivity\":0,\"maxAutoClips\":20,\"clipSignals\":{\"enableDistributedSignals\":true,\"enablePhraseSignals\":true,\"enableGameSignals\":true},\"mlPipelinesEnabled\":{\"emotionClassifier\":true,\"wakeWordDetector\":false,\"yellDetector\":true,\"whisperTranscription\":true},\"autoClipPhrases\":[\"clip that\",\"clip it\",\"clip clip\"]},\"newClipsCount\":0,\"newClipIds\":[],\"hardwareClassification\":null,\"hardwareClassificationVersion\":0,\"hasClips\":false,\"hardwareClassificationForDecoupled\":null,\"hasTakenDecoupledClip\":false,\"clipsEducationState\":{\"dismissedAt\":null,\"numberOfGamesLaunchedSinceDismissal\":0,\"numberOfTimesDismissed\":0}},\"_version\":14}"
+        },
+        {
+          "name": "PromotionsPersistedStore",
+          "value": "{\"_state\":{},\"_version\":1}"
+        },
+        {
+          "name": "DefaultRouteStore",
+          "value": "{\"_state\":{\"lastViewedPath\":null},\"_version\":1}"
+        },
+        {
+          "name": "UserOfferStore",
+          "value": "{\"_state\":{\"userTrialOffers\":{},\"userDiscountOffers\":{},\"isFetching\":false,\"lastFetchSuccessful\":false},\"_version\":3}"
+        },
+        {
+          "name": "deviceProperties",
+          "value": "{\"os\":\"Mac OS X\",\"browser\":\"Chrome\",\"device\":\"\",\"system_locale\":\"en-US\",\"has_client_mods\":false}"
+        },
+        {
+          "name": "ThemeStore",
+          "value": "{\"_state\":{\"theme\":\"darker\",\"preferences\":{\"dark\":\"darker\",\"light\":\"light\",\"unknown\":\"darker\"},\"status\":0},\"_version\":2}"
+        },
+        {
+          "name": "ApexExperimentStore",
+          "value": "{\"_state\":{\"version\":3,\"evaluatedExperiments\":{\"user\":{},\"guild\":{},\"installation\":{}},\"clientOverrides\":{}},\"_version\":0}"
+        },
+        {
+          "name": "OverlayStoreV2",
+          "value": "{\"_state\":{},\"_version\":2}"
+        },
+        {
+          "name": "keybinds",
+          "value": "{\"_state\":{},\"_version\":5}"
+        },
+        {
+          "name": "LayoutStore",
+          "value": "{\"_state\":{\"layouts\":{},\"widgets\":{}},\"_version\":4}"
+        },
+        {
+          "name": "EmbeddedActivities",
+          "value": "{\"_state\":{\"seenNewActivities\":{},\"seenUpdatedActivities\":{},\"everLaunchedActivities\":[],\"lastCheckedForBadgeableActivities\":null,\"dateRangesForSurfaces\":{}},\"_version\":10}"
+        },
+        {
+          "name": "EmojiStoreV2",
+          "value": "{\"_state\":{\"pendingUsages\":[],\"emojiReactionPendingUsages\":[],\"expandedSectionsByGuildIds\":[]},\"_version\":1}"
+        },
+        {
+          "name": "referralProperties",
+          "value": "{\"referrer\":\"https://www.youtube.com/\",\"referring_domain\":\"www.youtube.com\"}"
+        },
+        {
+          "name": "notifications",
+          "value": "{\"_state\":{\"desktopType\":\"NEVER\",\"disableAllSounds\":false,\"disabledSounds\":[],\"ttsType\":\"NEVER\",\"disableUnreadBadge\":false,\"taskbarFlash\":true,\"notifyMessagesInSelectedChannel\":false},\"_version\":1}"
+        },
+        {
+          "name": "PendingReplyStore",
+          "value": "{\"_state\":{},\"_version\":1}"
+        },
+        {
+          "name": "DraftStore",
+          "value": "{\"_state\":{},\"_version\":2}"
+        },
+        {
+          "name": "ApplicationStoreUserSettingsStore",
+          "value": "{\"_state\":{\"hasAcceptedEulaIds\":[]},\"_version\":1}"
+        }
+      ]
+    }
+  ]
+}

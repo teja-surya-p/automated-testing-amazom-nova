@@ -1,0 +1,449 @@
+{
+  "cookies": [
+    {
+      "name": "xp_aostkn",
+      "value": "xRcrhaXlsJPW38aPCFVbbsi8_o6aZ8i8_o6aZwA",
+      "domain": ".xp.apple.com",
+      "path": "/report/2/xp_aos_clientperf",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "car-prod-us-west-1",
+      "value": "\"a0625ada7f1b603b\"",
+      "domain": "contactretail.apple.com",
+      "path": "/api/v1/contactoptions",
+      "expires": 1773037985.917701,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "client",
+      "value": "\"b085feb9-ac10-4b08-b1a8-c35fdbdbaa35:1773032059582:1773032311200\"",
+      "domain": ".apple.com",
+      "path": "/content/services",
+      "expires": 1773034111.212359,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "geo",
+      "value": "US",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "dssid2",
+      "value": "37139cba-1e34-46aa-96fc-610828b052db",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1804568313.132722,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "dssf",
+      "value": "1",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1804568313.132807,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "as_dc",
+      "value": "ucp6",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1773039513.132897,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "as_rumid",
+      "value": "b0b1870f-dce4-48aa-889e-b3b7715426a8",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Strict"
+    },
+    {
+      "name": "shld_bt_m",
+      "value": "kD61lbRHEc_6g9gLk1XWlQ|1773039100|_JhE1o6ObQiGe3o1D_kmYg|fNHx2u10C4EzmFaM2KkiYQv09n4",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1773039100.831531,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "s_fid",
+      "value": "5A29268F99C3B105-0329FADDBFA5A689",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1773034116,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "s_afc",
+      "value": "p240%7Cgo%7Ecmp-21644513200%7Eadg-172212795549%7Ead-799064216823_kwd-10778630%7Edev-c%7Eext-%7Eprd-%7Emca-%7Ent-search",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "s_campaign",
+      "value": "aos-us-kwgo-txt-brand--brand-mbn-preorder-030426-",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "s_cc",
+      "value": "true",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "sh_spksy",
+      "value": ".",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1773035911.392966,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "s_vi",
+      "value": "[CS]v1|34D728EEA7980910-40001FACE009EFA0[CE]",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1773034116.320166,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "shld_bt_ck",
+      "value": "1y8iJ90gaIIO3zUG147_Lw|1773039102|ldip-8EVQe0pHOTeyPL6lyJmeeppsHyvVJB4ZXCeHAgBByp3of-nrRgdO1_KCuyeEHoX74bhR3c_3uUDMG6ciR4VBX3cIy5t1spgFTn-KIbOMYjKuiUMT-Qy9aUqg9MCddFF09zzHKuCrCYEkZVa-tvLE7QpR1ynj2P6xlYX-GnJTjkvP-Ap4UwTnZcL1MscQPU7tvwtrnVSmFKiy5DC0XLO2hpJ0Ep76K8jZJAXEBPWY5Yo5Kw1rciLv05eaJp3yO9D_bWi5K2si4LPmMXBRmjbxQtbLA1OB_eRay6Lj3nlixfiHmawEWk10CFJAbhczqP1PW16UpcjNI3Ku9YsEHAf8KLm1Bwuo7l1SAIRbSyS8P6NLXbSSeJOdS3Gyg-O|h-W9mdjmk-IrBfoXLOEYyV_d9fg",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1773039102.784254,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "webcookie",
+      "value": "31096ee3b7181be63671deff0f3fc524db997f7ff26372434e1a4f764d5b7f3018719998f40c011235bbae65bf72b8ab511a30ef58dfd0be84fa432b9a80d4daf137a01b6d24bcdf396e02c5aa41fa8596d21a9bd2ff78605386573701fc9b8e13516ed9ad4bfd9f7b42443286d18ff9",
+      "domain": ".contactretail.apple.com",
+      "path": "/",
+      "expires": 1773039340.742159,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "personalsetupcookie",
+      "value": "",
+      "domain": ".contactretail.apple.com",
+      "path": "/",
+      "expires": 1773039340.74221,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "car-prod-us-east-1",
+      "value": "\"606971ef2c0d9a3b\"",
+      "domain": "contactretail.apple.com",
+      "path": "/",
+      "expires": 1773037909.406399,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "as_atb",
+      "value": "1.0|MjAyNi0wMy0wOCAwOTo1MjowNw|180a6c9784124595a2c44aa988d31017f992c65b",
+      "domain": ".www.apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "contactretail",
+      "value": "0169f9ea74638a85a13033f626080197",
+      "domain": "contactretail.apple.com",
+      "path": "/",
+      "expires": 1773061063.641907,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "POD",
+      "value": "us~en",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1775451509,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "at_check",
+      "value": "true",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "as_pcts",
+      "value": "d9Q4VksDrWCNy+jruG+TI_bnqsvanv8yQz9_LQfsrxiy8UBj-gNKScLenzT6Zv-miT3xgGUvkOKiywyPO4pWh6gUo+SdiMT2mkO36UGVl6NTnmvDid3htRx+Ay9P4T+mk+WK8a3KE+gwCAx1ndbbRCsRR246OLw-lOTW:0U6BAxcattojKBvp3i4l3sayG6Kg8P:us0EPpR3ALQD_ewta-6cRQpLec1WTxzBluSAg",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "as_sfa",
+      "value": "Mnx1c3x1c3x8ZW5fVVN8Y29uc3VtZXJ8aW50ZXJuZXR8MHwwfDE",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1788583500,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "mbox",
+      "value": "session#468c433d8f1b445eb950aef301d3a30a#1773033949|PC#468c433d8f1b445eb950aef301d3a30a.34_0#1773034051",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1773034051,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "dslang",
+      "value": "US-EN",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "site",
+      "value": "USA",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "SESSION",
+      "value": "6f94c333-ee5b-44a3-8e2c-38a7d0c2661b",
+      "domain": "contactretail.apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "aasp",
+      "value": "8B0A6B5A398017D9B799765FB0659AFA562B639E16C95EAE319C9EEDE0F954A85AFC70F628B2B426CC24EBD733143CA998967FFD7678BA647FD54B8EF0E0DF9F104500F17ABBC3F9AD2B4A1AE3E2A2BCB64063CC62CE5F9245B6AE9229914178D9833DC951B973AE95C88588A149284BE0B9922ADE45D469",
+      "domain": ".idmsa.apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "aa",
+      "value": "8CA10F028F906B76D984B3A2858D6418",
+      "domain": ".idmsa.apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "nn-user-journey",
+      "value": "%7B%22value%22%3A%7B%22os%22%3A%2226.3.1%3B%22%2C%22device%22%3A%22MACOS%3B%20ARM%3B%2064%3B%22%2C%22journey%22%3A%7B%22lastPath%22%3A%22https%3A%2F%2Fwww.apple.com%2F%22%2C%22stitchPath%22%3A%5B%22https%3A%2F%2Fwww.apple.com%2Fretail%2Flenoxsquare%2F%22%2C%22%2F%22%2C%22https%3A%2F%2Fwww.apple.com%2F%22%2C%22%2F%22%2C%22https%3A%2F%2Fwww.apple.com%2Fus%2Fshop%2Fgoto%2Fhome%22%2C%22%2F%22%2C%22https%3A%2F%2Fwww.apple.com%2F%22%2C%22%2F%22%2C%22https%3A%2F%2Fwww.apple.com%2F%22%2C%22%2F%22%2C%22https%3A%2F%2Fwww.apple.com%2F%22%5D%7D%7D%2C%22expiry%22%3A1773033091082%7D",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": 1773812311.082701,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "s_sq",
+      "value": "%5B%5BB%5D%5D",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "mk_epub",
+      "value": "%7B%22btuid%22%3A%221sgjs68%22%2C%22prop57%22%3A%22www.us.airpods.tab%2Bother%22%7D",
+      "domain": ".apple.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.apple.com",
+      "localStorage": [
+        {
+          "name": "as_tgt_clean",
+          "value": "true"
+        },
+        {
+          "name": "acv-audiotrack-language",
+          "value": "en"
+        },
+        {
+          "name": "ls-opt-out",
+          "value": "{\"e\":5576,\"v\":{\"dismissals\":0}}"
+        },
+        {
+          "name": "acv-audiotrack-type",
+          "value": "main"
+        },
+        {
+          "name": "ac-store-cache",
+          "value": "{\"ttl\":1773032491314,\"items\":0,\"cn\":\"\",\"api\":{\"flyout\":\"/%5Bstorefront%5D/shop/bag/flyout\",\"addToBag\":\"/%5Bstorefront%5D/shop/bag/add?product=%5Bpart%5D\"},\"key\":\"SFX9YPYY9PPXCU9KH\",\"sfLoc\":\"us\"}"
+        },
+        {
+          "name": "mk_epub",
+          "value": "{\"deferredBeacon\":{\"prop57\":\"www.us.airpods.tab+other\",\"btuid\":\"1sgjs68\"}}"
+        },
+        {
+          "name": "mk_epub_expiry",
+          "value": "1773039516265"
+        }
+      ]
+    },
+    {
+      "origin": "https://support.apple.com",
+      "localStorage": [
+        {
+          "name": "ac-store-cache",
+          "value": "{\"ttl\":1773032489667,\"items\":0,\"cn\":\"\",\"api\":{\"flyout\":\"//www.apple.com/%5Bstorefront%5D/shop/bag/flyout\",\"addToBag\":\"//www.apple.com/%5Bstorefront%5D/shop/bag/add?product=%5Bpart%5D\"},\"key\":\"S2A49YFKJF2JAT22K\",\"sfLoc\":\"us\"}"
+        },
+        {
+          "name": "nn-data-raw",
+          "value": "[]"
+        },
+        {
+          "name": "nn-clientId",
+          "value": "86452f6d-cc60-4600-8200-000650206142-1773032059375"
+        },
+        {
+          "name": "nn-data-timestamp",
+          "value": "1773032311132"
+        },
+        {
+          "name": "nn-data-chunked",
+          "value": "[]"
+        }
+      ]
+    },
+    {
+      "origin": "https://music.apple.com",
+      "localStorage": [
+        {
+          "name": "mtClientConfig_debugSource_xp_amp_music_perf",
+          "value": "{\"maxPersistentQueueSize\":350,\"disabled\":false}"
+        },
+        {
+          "name": "mtId_analyticsClientId_AMPWeb_isSignedOut",
+          "value": "{\"value\":\"4zYPMSBwBzW36iKz97Lz4uRzB67zASBdfLc\",\"expirationTime\":1773118644249}"
+        },
+        {
+          "name": "mtClientConfig_cachedSource_xp_amp_music_cs_unidentified",
+          "value": "{\"blacklistedFields\":[],\"compoundSeparator\":\"_\",\"fieldsMap\":{\"custom\":{\"impressions\":[\"id\",\"adamId\",\"link.type\",\"station-hash\"],\"location\":[\"id\",\"adamId\",\"dataSetId\",\"name\",\"fcKind\",\"kindIds\",\"type\",\"link.type\",\"station-hash\",\"core-seed-name\"]},\"multi\":{},\"single\":{\"targetId\":[\"id\",\"adamId\",\"contentId\",\"type\",\"link.type\",\"fcId\",\"userPreference\",\"label\",\"station-hash\",\"linkIdentifier\"]}},\"ignoreClientIdCookie\":true,\"metricsUrl\":\"https://xp.apple.com/report\",\"postFrequency\":60000,\"postFrequencyLowLatency\":5000,\"tokenSeparator\":\"|\",\"treatmentProfiles\":{\"AMPFunnel\":{\"treatments\":[{\"filters\":\"any\",\"eventActions\":{\"blacklistedFields\":[\"mtClientId\",\"mtRequestId\",\"pliIds\",\"userAgent\",\"screenHeight\",\"screenWidth\",\"windowInnerHeight\",\"windowInnerWidth\",\"windowOuterHeight\",\"windowOuterWidth\"]},\"fieldActions\":{\"eventTime\":{\"treatmentType\":\"timeDeres\",\"precision\":86400000},\"clientId\":{\"treatmentType\":\"idGenerator\",\"storageKeyPrefix\":\"mtId_clientId_unidentified\",\"lifespan\":15552000000}}}]}}}"
+        },
+        {
+          "name": "mtClientConfig_debugSource_noTopicConfig",
+          "value": "{\"maxPersistentQueueSize\":350,\"disabled\":false}"
+        },
+        {
+          "name": "mtClientId_AMPWeb_isSignedOut",
+          "value": "{\"value\":\"4zYPMSBwBz1jUvmUz8gHz5Fdz99Ez1NkykhIie\",\"expirationTime\":1773118644249}"
+        },
+        {
+          "name": "mtId_clientId_unidentified",
+          "value": "{\"value\":\"4zYhfRI1PzfyKQHz3sez4ktzBnuzaaUvwQZt\",\"expirationTime\":1788584244249}"
+        },
+        {
+          "name": "mtClientConfig_cachedSource_xp_its_music_main",
+          "value": "{\"blacklistedFields\":[],\"constraints\":{\"profiles\":{\"AMPWeb\":{\"precedenceOrderedRules\":[{\"filters\":\"any\",\"fieldConstraints\":{\"clientId\":{\"generateValue\":true,\"namespace\":\"AMPWeb_isSignedOut\",\"expirationPeriod\":86400000}}},{\"filters\":{\"valueMatches\":{\"isSignedIn\":[true]}},\"fieldConstraints\":{\"clientId\":{\"generateValue\":true,\"namespace\":\"AMPWeb_isSignedIn\",\"expirationPeriod\":15552000000}}}]}}},\"treatmentProfiles\":{\"AMPWeb\":{\"treatments\":[{\"filters\":\"any\",\"fieldActions\":{\"clientId\":{\"treatmentType\":\"idGenerator\",\"storageKeyPrefix\":\"mtClientId\",\"namespace\":\"AMPWeb_isSignedOut\",\"lifespan\":86400000,\"persistIdForSession\":true},\"analyticsClientId\":{\"treatmentType\":\"idGenerator\",\"namespace\":\"AMPWeb_isSignedOut\",\"lifespan\":86400000,\"persistIdForSession\":true}}},{\"filters\":{\"isSignedIn\":{\"valueMatches\":[true]}},\"fieldActions\":{\"clientId\":{\"treatmentType\":\"idGenerator\",\"storageKeyPrefix\":\"mtClientId\",\"namespace\":\"AMPWeb_isSignedIn\",\"lifespan\":15552000000,\"persistIdForSession\":true},\"analyticsClientId\":{\"treatmentType\":\"idGenerator\",\"namespace\":\"AMPWeb_isSignedIn\",\"lifespan\":15552000000,\"persistIdForSession\":true}}}]}},\"compoundSeparator\":\"_\",\"fieldsMap\":{\"cookies\":[\"itcCt\",\"itscc\"],\"custom\":{\"impressions\":[\"id\",\"adamId\",\"link.type\",\"station-hash\"],\"location\":[\"id\",\"adamId\",\"dataSetId\",\"name\",\"fcKind\",\"kindIds\",\"type\",\"link.type\",\"station-hash\",\"core-seed-name\"]},\"multi\":{},\"single\":{\"targetId\":[\"id\",\"adamId\",\"contentId\",\"type\",\"link.type\",\"fcId\",\"userPreference\",\"label\",\"station-hash\",\"linkIdentifier\"]}},\"metricsUrl\":\"https://xp.apple.com/report\",\"postFrequency\":60000,\"postFrequencyLowLatency\":5000,\"tokenSeparator\":\"|\"}"
+        },
+        {
+          "name": "mtTimestamp_eventTime",
+          "value": "{\"exp\":1773100800000,\"sn\":19}"
+        },
+        {
+          "name": "mtClientConfig_cachedSource_xp_amp_commerce_ui_perf",
+          "value": "{\"metricsUrl\":\"https://xp.apple.com/report\",\"postFrequency\":60000,\"performance\":{\"samplingForced\":false,\"samplingPercentage\":0.5,\"sessionDuration\":20000,\"sessionDurationPageRender\":60000,\"samplingPercentageUsers\":0.003,\"samplingPercentageUsersPageRender\":0.01},\"fieldsMap\":{\"loadUrl\":{\"timestampFields\":{\"redirectStartTime\":[\"redirectStart\"],\"redirectEndTime\":[\"redirectEnd\"],\"fetchStartTime\":[\"fetchStart\"],\"domainLookupStartTime\":[\"domainLookupStart\"],\"domainLookupEndTime\":[\"domainLookupEnd\"],\"connectionStartTime\":[\"connectStart\"],\"connectionEndTime\":[\"connectEnd\"],\"secureConnectionStartTime\":[\"secureConnectionStart\"],\"requestStartTime\":[\"requestStart\"],\"responseStartTime\":[\"responseStart\"],\"responseEndTime\":[\"responseEnd\"]},\"otherFields\":{\"requestUrl\":[\"name\"]}}}}"
+        },
+        {
+          "name": "mtClientConfig_cachedSource_xp_amp_music_perf",
+          "value": "{\"blacklistedFields\":[\"capacitySystem\",\"capacitySystemAvailable\",\"capacityDisk\",\"capacityData\",\"capacityDataAvailable\"],\"compoundSeparator\":\"_\",\"fieldsMap\":{\"cookies\":[\"itcCt\",\"itscc\"],\"custom\":{\"impressions\":[\"id\",\"adamId\",\"link.type\",\"station-hash\"],\"location\":[\"id\",\"adamId\",\"dataSetId\",\"name\",\"fcKind\",\"kindIds\",\"type\",\"link.type\",\"station-hash\",\"core-seed-name\"]},\"loadUrl\":{\"timestampFields\":{\"fetchStartTime\":[\"fetchStart\"],\"domainLookupStartTime\":[\"domainLookupStart\"],\"domainLookupEndTime\":[\"domainLookupEnd\"],\"connectionStartTime\":[\"connectStart\"],\"connectionEndTime\":[\"connectEnd\"],\"secureConnectionStartTime\":[\"secureConnectionStart\"],\"requestStartTime\":[\"requestStart\"],\"responseStartTime\":[\"responseStart\"],\"responseEndTime\":[\"responseEnd\"]},\"otherFields\":{\"requestUrl\":[\"name\"],\"transferSize\":[\"transferSize\"]}},\"multi\":{},\"single\":{\"targetId\":[\"id\",\"adamId\",\"contentId\",\"type\",\"link.type\",\"fcId\",\"userPreference\",\"label\",\"station-hash\",\"linkIdentifier\"]}},\"impressions\":{\"viewableThreshold\":1000,\"viewablePercentage\":0.5},\"metricsUrl\":\"https://xp.apple.com/report\",\"performance\":{\"samplingPercentage\":0.25,\"samplingPercentageUsers\":0.25,\"sessionDuration\":60000,\"samplingPercentageUsersPageRender\":0.25,\"sessionDurationPageRender\":60000},\"postFrequency\":60000,\"postFrequencyLowLatency\":5000,\"tokenSeparator\":\"|\"}"
+        }
+      ]
+    }
+  ]
+}
