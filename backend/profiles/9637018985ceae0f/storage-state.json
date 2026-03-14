@@ -1,0 +1,25 @@
+{
+  "cookies": [
+    {
+      "name": "nfd-enable-cf-opt",
+      "value": "63a6825d27cab0f204d3b602",
+      "domain": "practicetestautomation.com",
+      "path": "/",
+      "expires": 1773294657.923217,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.google.com",
+      "localStorage": [
+        {
+          "name": "rc::a",
+          "value": "MXdibXprb2FnMm9jMA=="
+        }
+      ]
+    }
+  ]
+}

@@ -6,6 +6,13 @@ import {
   resolveUiuxTimeBudgetMs,
   shouldCapUiuxAllDeviceSelection
 } from "../../types/uiux/budget.js";
+import { DEFAULT_UIUX_BREAKPOINT_SETTINGS } from "../../types/uiux/componentBreakpointAnalysis.js";
+
+const UIUX_MAX_PAGES_CAP = Math.max(50, Number(config.uiuxMaxPagesCap ?? 2000) || 2000);
+const UIUX_DEFAULT_MAX_PAGES = Math.min(
+  Math.max(1, Number(config.uiuxDefaultMaxPages ?? 120) || 120),
+  UIUX_MAX_PAGES_CAP
+);
 
 export const TEST_MODES = [
   "default",
@@ -52,7 +59,7 @@ const stringList = z.array(sanitizedDomain).default([]);
 const budgetsSchema = z
   .object({
     maxSteps: z.coerce.number().int().min(1).max(200).default(config.maxSteps),
-    timeBudgetMs: z.coerce.number().int().min(1_000).max(3_600_000).default(config.crawlerTimeBudgetMs),
+    timeBudgetMs: z.coerce.number().int().min(1_000).max(7_200_000).default(config.crawlerTimeBudgetMs),
     stagnationLimit: z.coerce.number().int().min(1).max(20).default(config.stagnationLimit),
     actionRetryCount: z.coerce.number().int().min(1).max(10).default(config.actionRetryCount)
   })
@@ -177,20 +184,114 @@ const uiuxBaselineSchema = z
     mode: "off"
   });
 
+const uiuxBreakpointsSchema = z
+  .object({
+    enabled: z.coerce.boolean().default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.enabled),
+    autonomous: z.coerce.boolean().default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.autonomous),
+    minWidth: z.coerce.number().int().min(240).max(2200).default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.minWidth),
+    maxWidth: z.coerce.number().int().min(320).max(2560).default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.maxWidth),
+    coarseStep: z.coerce.number().int().min(8).max(220).default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.coarseStep),
+    fineStep: z.coerce.number().int().min(4).max(120).default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.fineStep),
+    refineTransitions: z.coerce.boolean().default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.refineTransitions),
+    representativeWidthsPerRange: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(5)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.representativeWidthsPerRange),
+    maxConcurrentWorkers: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(8)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.maxConcurrentWorkers),
+    maxComponentsPerPage: z.coerce
+      .number()
+      .int()
+      .min(4)
+      .max(60)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.maxComponentsPerPage),
+    maxWidthsPerPage: z.coerce
+      .number()
+      .int()
+      .min(4)
+      .max(96)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.maxWidthsPerPage),
+    minHeight: z.coerce.number().int().min(320).max(1400).default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.minHeight),
+    maxHeight: z.coerce.number().int().min(480).max(2200).default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.maxHeight),
+    heightFineStep: z.coerce
+      .number()
+      .int()
+      .min(24)
+      .max(180)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.heightFineStep),
+    maxHeightsPerPage: z.coerce
+      .number()
+      .int()
+      .min(2)
+      .max(8)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.maxHeightsPerPage),
+    maxViewportsPerPage: z.coerce
+      .number()
+      .int()
+      .min(24)
+      .max(300)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.maxViewportsPerPage),
+    nearbyValidationRadius: z.coerce
+      .number()
+      .int()
+      .min(12)
+      .max(120)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.nearbyValidationRadius),
+    maxNearbyViewportProbes: z.coerce
+      .number()
+      .int()
+      .min(4)
+      .max(32)
+      .default(DEFAULT_UIUX_BREAKPOINT_SETTINGS.maxNearbyViewportProbes)
+  })
+  .superRefine((value, ctx) => {
+    if (value.maxWidth <= value.minWidth) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["maxWidth"],
+        message: "maxWidth must be greater than minWidth."
+      });
+    }
+    if (value.fineStep > value.coarseStep) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["fineStep"],
+        message: "fineStep cannot be greater than coarseStep."
+      });
+    }
+    if (value.maxHeight <= value.minHeight) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["maxHeight"],
+        message: "maxHeight must be greater than minHeight."
+      });
+    }
+  })
+  .default({
+    ...DEFAULT_UIUX_BREAKPOINT_SETTINGS
+  });
+
 const uiuxSchema = z
   .object({
-    maxPages: z.coerce.number().int().min(1).max(500).default(24),
+    maxPages: z.coerce.number().int().min(1).max(UIUX_MAX_PAGES_CAP).default(UIUX_DEFAULT_MAX_PAGES),
     depthLimit: z.coerce.number().int().min(1).max(50).default(config.crawlerDepthLimit),
     perDomainCap: z.coerce.number().int().min(1).max(2_000).default(120),
     maxInteractionsPerPage: z.coerce.number().int().min(0).max(20).default(6),
-    timeBudgetMs: z.coerce.number().int().min(10_000).max(3_600_000).optional(),
+    timeBudgetMs: z.coerce.number().int().min(10_000).max(7_200_000).optional(),
     viewports: z.array(viewportSchema).min(1).max(6).optional(),
     devices: uiuxDevicesSchema,
+    breakpoints: uiuxBreakpointsSchema,
     artifactRetention: uiuxArtifactRetentionSchema,
     baseline: uiuxBaselineSchema
   })
   .default({
-    maxPages: 24,
+    maxPages: UIUX_DEFAULT_MAX_PAGES,
     depthLimit: config.crawlerDepthLimit,
     perDomainCap: 120,
     maxInteractionsPerPage: 6,
@@ -203,6 +304,9 @@ const uiuxSchema = z
       allowlist: [],
       blocklist: [],
       includeUserAgents: false
+    },
+    breakpoints: {
+      ...DEFAULT_UIUX_BREAKPOINT_SETTINGS
     },
     artifactRetention: {
       maxSnapshotsPerViewport: 12,
@@ -238,6 +342,12 @@ const functionalContractsSchema = z
     endpointAllowlistPatterns: [],
     endpointBlocklistPatterns: []
   });
+
+const functionalCheckIdsSchema = z
+  .array(z.string().trim().min(1).regex(/^[A-Z0-9_]+$/))
+  .min(1)
+  .max(1000)
+  .transform((entries) => [...new Set(entries)]);
 
 const functionalLoginAssistSchema = z
   .object({
@@ -288,6 +398,7 @@ const functionalProfileSchema = z
 const functionalSchema = z
   .object({
     strategy: z.enum(FUNCTIONAL_STRATEGIES).default("smoke-pack"),
+    checkIds: functionalCheckIdsSchema.optional(),
     maxFlows: z.coerce.number().int().min(1).max(20).default(6),
     maxStepsPerFlow: z.coerce.number().int().min(1).max(40).default(12),
     allowFormSubmit: z.coerce.boolean().default(false),
@@ -454,6 +565,57 @@ const accessibilitySchema = z
     }
   });
 
+const performanceSchema = z
+  .object({
+    sampleCount: z.coerce.number().int().min(1).max(8).default(3),
+    warmupDelayMs: z.coerce.number().int().min(0).max(5_000).default(600),
+    baseline: z
+      .object({
+        baselineId: z.string().trim().max(120).default(""),
+        mode: z.enum(["off", "write", "compare"]).default("off")
+      })
+      .default({
+        baselineId: "",
+        mode: "off"
+      }),
+    budgets: z
+      .object({
+        ttfbMs: z.coerce.number().int().min(250).max(20_000).default(1800),
+        fcpMs: z.coerce.number().int().min(300).max(20_000).default(2500),
+        lcpMs: z.coerce.number().int().min(500).max(30_000).default(4000),
+        cls: z.coerce.number().min(0.01).max(1).default(0.1),
+        domContentLoadedMs: z.coerce.number().int().min(500).max(30_000).default(3500),
+        loadEventMs: z.coerce.number().int().min(800).max(60_000).default(7000),
+        failedRequests: z.coerce.number().int().min(0).max(200).default(2)
+      })
+      .default({
+        ttfbMs: 1800,
+        fcpMs: 2500,
+        lcpMs: 4000,
+        cls: 0.1,
+        domContentLoadedMs: 3500,
+        loadEventMs: 7000,
+        failedRequests: 2
+      })
+  })
+  .default({
+    sampleCount: 3,
+    warmupDelayMs: 600,
+    baseline: {
+      baselineId: "",
+      mode: "off"
+    },
+    budgets: {
+      ttfbMs: 1800,
+      fcpMs: 2500,
+      lcpMs: 4000,
+      cls: 0.1,
+      domContentLoadedMs: 3500,
+      loadEventMs: 7000,
+      failedRequests: 2
+    }
+  });
+
 export const runConfigSchema = z
   .object({
     startUrl: z.string().trim().url(),
@@ -469,7 +631,8 @@ export const runConfigSchema = z
     readiness: readinessSchema,
     uiux: uiuxSchema,
     functional: functionalSchema,
-    accessibility: accessibilitySchema
+    accessibility: accessibilitySchema,
+    performance: performanceSchema
   })
   .superRefine((value, ctx) => {
     if (value.testMode === "default" && !value.goal) {
@@ -519,7 +682,8 @@ function mergeForValidation(body = {}, defaultStartUrl = config.targetAppUrl) {
     readiness: source.readiness,
     uiux: source.uiux,
     functional: source.functional,
-    accessibility: source.accessibility
+    accessibility: source.accessibility,
+    performance: source.performance
   };
 }
 

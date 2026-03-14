@@ -2,7 +2,10 @@ import { hashText } from "../../lib/utils.js";
 import { rankUiuxCandidate } from "../../library/policies/uiControlClassifier.js";
 import { baselineUiuxChecks } from "./checks/index.js";
 import { extractFormSemantics } from "../functional/formSemantics.js";
-import { resolveUiuxDeviceProfiles } from "./deviceMatrix.js";
+import {
+  buildCoarseWidthSweep,
+  resolveUiuxBreakpointSettings
+} from "./componentBreakpointAnalysis.js";
 
 export const SAFE_UIUX_ACTION_KINDS = [
   "NAV_CLICK",
@@ -260,16 +263,21 @@ export function selectUiuxSafeInteractionCandidates({
 }
 
 export function estimateUiuxPlannedCases(runConfig = {}) {
-  const maxPages = Math.max(1, Number(runConfig?.uiux?.maxPages ?? 20) || 20);
-  const explicitViewports = Array.isArray(runConfig?.uiux?.viewports) ? runConfig.uiux.viewports : [];
-  const deviceCount = Math.max(
+  const maxPages = Math.max(1, Number(runConfig?.uiux?.maxPages ?? 120) || 120);
+  const breakpointSettings = resolveUiuxBreakpointSettings(runConfig);
+  const sampledWidthCount = Math.max(1, buildCoarseWidthSweep(breakpointSettings).length);
+  const representativeWidthCount = Math.max(
     1,
-    (explicitViewports.length || resolveUiuxDeviceProfiles(runConfig).length || 3)
+    Number(breakpointSettings.representativeWidthsPerRange ?? 3) || 3
+  );
+  const coverageMultiplier = Math.max(
+    representativeWidthCount,
+    Math.min(sampledWidthCount, 8)
   );
   const checkCount = baselineUiuxChecks.length;
   const interactionsPerPage = Math.max(0, Number(runConfig?.uiux?.maxInteractionsPerPage ?? 6) || 6);
 
-  return maxPages * deviceCount * (1 + checkCount) + maxPages * interactionsPerPage;
+  return maxPages * coverageMultiplier * (1 + checkCount) + maxPages * interactionsPerPage;
 }
 
 export function planUiuxCasesForPage({

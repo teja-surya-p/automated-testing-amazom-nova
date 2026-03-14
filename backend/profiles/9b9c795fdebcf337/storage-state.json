@@ -1,0 +1,167 @@
+{
+  "cookies": [
+    {
+      "name": "w3s.theme",
+      "value": "null",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1805052523,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.1.594653933.1773271949",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1808076523.8242,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "WMF-Uniq",
+      "value": "oMZsAb2wWRtmB6VhFBXz9wMhAAEBAFvd8hXqmQr0RFMk3VTnO1unD3NMcEs5E_oe",
+      "domain": ".upload.wikimedia.org",
+      "path": "/",
+      "expires": 1804885616.988472,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_sharedid",
+      "value": "7f8014ff-4756-4c92-8742-d2b35006e906",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1804822497,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_sharedid_cst",
+      "value": "zix7LPQsHA%3D%3D",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1804822497,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "TDID",
+      "value": "fa2aa44a-ceff-45bf-a842-7a5712a46059",
+      "domain": ".adsrvr.org",
+      "path": "/",
+      "expires": 1805044407.6481,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "uid",
+      "value": "ded1fa22-ed7d-4c73-a4ab-06fd79c844bc",
+      "domain": ".criteo.com",
+      "path": "/",
+      "expires": 1806982497.750604,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "cto_bundle",
+      "value": "1LPySl9PNkNNMVY3VnJOR2NHUUJhZTF3Wk9BZjE5JTJCNGd2aHdkNXBzOEpHYnpIUVNzTzNpY1l1cSUyRldRSW9GOHlPYm1vdEs5VU90bVBUVjVpR2pVSmcyTm8wNGw0Wll3NlRvSEJ2N3YlMkJpT2NTU1FqR3VENlY1M20yb2I4S1kzR1k4b1FoSGNBUGdWVTNnUHRzR3VxT0s1dDFHejlDdFl5dE5vdm81VyUyRm9EJTJGQlUybmwlMkJFcDhjNnNSRm12MGpONE43JTJGTnZ2dw",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1807190007,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "cto_bidid",
+      "value": "i7-z319MV1dCMSUyRkJXMk1KY2ZvTTA0YXU0RG9rYUFveVl3QmFnTnBrYUQlMkJlbjVxSnA0YjA0bWlES1lwMGUzb2NhM1EyWDZMbWdmc0xZdkxRNlNqYndIM01VU2RQbk5FSGZKYURwYkJnNTZmODgwMDJQZWR4enAwVUU1ZDFzRTdDZEZLS1lKUVJCenVhS2RRNEsyYXg0Q1FmV09BJTNEJTNE",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1807190007,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "id5",
+      "value": "67a74afb-004c-7c25-826c-e30261114c50#1773286498000#4",
+      "domain": ".id5-sync.com",
+      "path": "/",
+      "expires": 1781284408.476657,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "id5_unrecognized",
+      "value": "1",
+      "domain": ".id5-sync.com",
+      "path": "/",
+      "expires": 1781284408.476695,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_ga_9YNMTB56NB",
+      "value": "GS2.1.s1773516523$o5$g0$t1773516523$j60$l0$h0",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1808076523.824071,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.w3schools.com",
+      "localStorage": [
+        {
+          "name": "cto_bidid",
+          "value": "i7-z319MV1dCMSUyRkJXMk1KY2ZvTTA0YXU0RG9rYUFveVl3QmFnTnBrYUQlMkJlbjVxSnA0YjA0bWlES1lwMGUzb2NhM1EyWDZMbWdmc0xZdkxRNlNqYndIM01VU2RQbk5FSGZKYURwYkJnNTZmODgwMDJQZWR4enAwVUU1ZDFzRTdDZEZLS1lKUVJCenVhS2RRNEsyYXg0Q1FmV09BJTNEJTNE"
+        },
+        {
+          "name": "showWebinarPopup",
+          "value": "true"
+        },
+        {
+          "name": "id5id_exp",
+          "value": "Fri, 12 Jun 2026 17:13:28 GMT"
+        },
+        {
+          "name": "cto_bundle",
+          "value": "1LPySl9PNkNNMVY3VnJOR2NHUUJhZTF3Wk9BZjE5JTJCNGd2aHdkNXBzOEpHYnpIUVNzTzNpY1l1cSUyRldRSW9GOHlPYm1vdEs5VU90bVBUVjVpR2pVSmcyTm8wNGw0Wll3NlRvSEJ2N3YlMkJpT2NTU1FqR3VENlY1M20yb2I4S1kzR1k4b1FoSGNBUGdWVTNnUHRzR3VxT0s1dDFHejlDdFl5dE5vdm81VyUyRm9EJTJGQlUybmwlMkJFcDhjNnNSRm12MGpONE43JTJGTnZ2dw"
+        },
+        {
+          "name": "preferredmode",
+          "value": "null"
+        },
+        {
+          "name": "id5id",
+          "value": "%7B%22signature%22%3A%22ID5_Att8ugKcJMeGAJ9gCT6aVjnbdVqd4cDNO2MIG1eYKywftOUDFO4afWTLCiErC_N6wjbpByZc0pwgLZ2dj82obUY2Sbt5Hri3j-08auNfp3ew13B1inqHZeGFvHgwMt3rOEd56uHb005bDza_y7V3DU1o3renMxbRrNba9b-gyyU7JevAxv0%22%2C%22created_at%22%3A%222026-03-14T17%3A13%3A28.424733815Z%22%2C%22id5_consent%22%3Atrue%2C%22original_uid%22%3A%22ID5*Cm6qNFfBdVDOIwOe4dsXz6TPRoqwngOe4dsXz6TPRor__2m1lzhaAQEBCmmyNGIAkoou1l9tDJOWkjY4dGpdRQ%22%2C%22universal_uid%22%3A%22ID5*Cm6qNFfBdVDOIwOe4dsXz6TPRoqwngOe4dsXz6TPRor__2m1lzhaAQEBCmmyNGIAkoou1l9tDJOWkjY4dGpdRQ%22%2C%22link_type%22%3A0%2C%22cascade_needed%22%3Atrue%2C%22privacy%22%3A%7B%22jurisdiction%22%3A%22other%22%2C%22id5_consent%22%3Atrue%7D%2C%22ext%22%3A%7B%22linkType%22%3A0%2C%22pba%22%3A%22qdkDLpErAPvRtUnzGYRQs4O6EEmH2813FUXxgLPm6GzfRb%2F2xx5%2FTjACbqm5Sqk%2BGEVjhIRSwC%2BlVXXhDom82A%3D%3D%22%7D%2C%22cache_control%22%3A%7B%22max_age_sec%22%3A7200%7D%2C%22ids%22%3A%7B%22id5id%22%3A%7B%22eid%22%3A%7B%22source%22%3A%22id5-sync.com%22%2C%22uids%22%3A%5B%7B%22id%22%3A%22ID5*Cm6qNFfBdVDOIwOe4dsXz6TPRoqwngOe4dsXz6TPRor__2m1lzhaAQEBCmmyNGIAkoou1l9tDJOWkjY4dGpdRQ%22%2C%22atype%22%3A1%2C%22ext%22%3A%7B%22linkType%22%3A0%2C%22pba%22%3A%22qdkDLpErAPvRtUnzGYRQs4O6EEmH2813FUXxgLPm6GzfRb%2F2xx5%2FTjACbqm5Sqk%2BGEVjhIRSwC%2BlVXXhDom82A%3D%3D%22%7D%7D%5D%7D%7D%7D%2C%22tags%22%3A%7B%22id%22%3A%22y%22%7D%7D"
+        },
+        {
+          "name": "id5id_cst",
+          "value": "TyylLI8srA=="
+        },
+        {
+          "name": "id5id_last",
+          "value": "Sat, 14 Mar 2026 17:13:28 GMT"
+        },
+        {
+          "name": "preferredpagemode",
+          "value": "null"
+        }
+      ]
+    }
+  ]
+}

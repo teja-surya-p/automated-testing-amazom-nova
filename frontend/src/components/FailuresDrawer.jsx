@@ -180,7 +180,7 @@ export default function FailuresDrawer({ open, onClose, failures = [], onSelectF
                     </span>
                     {failure.grouped ? (
                       <span className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-[10px] font-semibold text-cyan-100">
-                        {failure.occurrenceCount ?? failure.devices?.length ?? 1} devices
+                        {failure.affectedDeviceCount ?? failure.devices?.length ?? 1} devices
                       </span>
                     ) : (
                       <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] font-semibold text-cyan-100">
@@ -199,6 +199,11 @@ export default function FailuresDrawer({ open, onClose, failures = [], onSelectF
                   <p className="mt-1 text-xs text-slate-500">Why failed: {failure.whyItFailed || failure.actual || "No details"}</p>
                   <p className="mt-1 truncate text-xs text-slate-400">{failure.pageUrl ?? "-"}</p>
                   <p className="mt-1 text-[11px] text-slate-500">Check: {failure.testcaseTitle || failure.testcaseId || failure.issueType}</p>
+                  {failure.grouped && failure.sourceIssueTypes?.length > 1 ? (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Merged issue types: {failure.sourceIssueTypes.join(", ")}
+                    </p>
+                  ) : null}
                   {failure.grouped && failure.devices?.length ? (
                     <div className="mt-1 text-[11px] text-slate-400">
                       <p className="text-slate-500">Affected devices:</p>

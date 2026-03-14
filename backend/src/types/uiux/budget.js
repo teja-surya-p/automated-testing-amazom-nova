@@ -1,5 +1,10 @@
 import { config } from "../../lib/config.js";
 import { baselineUiuxChecks } from "./checks/index.js";
+import {
+  buildCoarseHeightSweep,
+  buildCoarseWidthSweep,
+  resolveUiuxBreakpointSettings
+} from "./componentBreakpointAnalysis.js";
 
 export const MIN_UIUX_TIME_BUDGET_MS = 10_000;
 export const MAX_UIUX_TIME_BUDGET_MS = 7_200_000;
@@ -9,19 +14,19 @@ const QUICK_DEFAULT_UIUX_TIME_BUDGET_MS = clampInteger(
   config.uiuxQuickTimeBudgetMs,
   MIN_UIUX_TIME_BUDGET_MS,
   MAX_UIUX_TIME_BUDGET_MS,
-  600_000
+  2_400_000
 );
 const FULL_DEFAULT_UIUX_TIME_BUDGET_MS = clampInteger(
   config.uiuxFullTimeBudgetMs,
   MIN_UIUX_TIME_BUDGET_MS,
   MAX_UIUX_TIME_BUDGET_MS,
-  1_800_000
+  3_600_000
 );
 const FULL_ALL_DEFAULT_UIUX_TIME_BUDGET_MS = clampInteger(
   config.uiuxFullAllTimeBudgetMs,
   MIN_UIUX_TIME_BUDGET_MS,
   MAX_UIUX_TIME_BUDGET_MS,
-  3_600_000
+  5_400_000
 );
 export const UIUX_ALL_SELECTION_MIN_TIME_BUDGET_MS = clampInteger(
   config.uiuxAllSelectionMinBudgetMs,
@@ -162,20 +167,39 @@ export function resolveUiuxAllDeviceCap({
 
 export function buildUiuxEffectiveBudget({ runConfig = {}, rawInput = {} } = {}) {
   const timeBudgetMs = resolveUiuxTimeBudgetMs(runConfig, rawInput);
-  const maxPages = clampInteger(runConfig?.uiux?.maxPages, 1, 500, 24);
+  const maxPagesCap = Math.max(50, Number(config.uiuxMaxPagesCap ?? 2000) || 2000);
+  const maxPagesDefault = clampInteger(
+    config.uiuxDefaultMaxPages,
+    1,
+    maxPagesCap,
+    Math.min(120, maxPagesCap)
+  );
+  const maxPages = clampInteger(runConfig?.uiux?.maxPages, 1, maxPagesCap, maxPagesDefault);
   const maxInteractionsPerPage = clampInteger(runConfig?.uiux?.maxInteractionsPerPage, 0, 20, 6);
   const checkCount = Math.max(1, baselineUiuxChecks.length);
   const deviceMode = resolveUiuxDeviceMode(runConfig, rawInput);
   const deviceSelection = resolveUiuxDeviceSelection(runConfig, rawInput);
+  const breakpointSettings = resolveUiuxBreakpointSettings(runConfig);
+  const sampledWidths = buildCoarseWidthSweep(breakpointSettings);
+  const sampledHeights = buildCoarseHeightSweep(
+    breakpointSettings,
+    runConfig?.uiux?.__runtimeContext?.viewportHeight ?? 900
+  );
 
   return {
     mode: "uiux",
+    strategy: "component-breakpoint",
     timeBudgetMs,
     maxPages,
     maxInteractionsPerPage,
     checkCount,
     deviceMode,
-    deviceSelection
+    deviceSelection,
+    breakpointSettings,
+    sampledWidthEstimate: sampledWidths.length,
+    sampledHeightEstimate: sampledHeights.length,
+    sampledViewportEstimate: sampledWidths.length * sampledHeights.length,
+    representativeWidthCountPerRange: breakpointSettings.representativeWidthsPerRange
   };
 }
 

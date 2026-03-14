@@ -1,0 +1,15 @@
+{
+  "cookies": [
+    {
+      "name": "lrm_session",
+      "value": "%7B%22name%22%3A%22Mk%22%2C%22role%22%3A%22VIDEOGRAPHER%22%2C%22accessKey%22%3A%22LRM-VG-A512%22%2C%22userId%22%3A%22c7f30d52-1705-493b-abe8-b9e7e1bcf7ad%22%2C%22sessionId%22%3A%22d1e6bb35-d4f5-43c4-adf9-f8e51883823e%22%7D.eyufmGfcDYAu7RJfFUckSNW4J6Q9aX3aDGtnssX-3NQ",
+      "domain": "lrm-main.vercel.app",
+      "path": "/",
+      "expires": 1773317527.174973,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Strict"
+    }
+  ],
+  "origins": []
+}

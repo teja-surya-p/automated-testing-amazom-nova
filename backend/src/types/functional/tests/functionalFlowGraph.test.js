@@ -179,3 +179,53 @@ test("flow discovery excludes submit-based templates when submit is disabled", (
 
   assert.equal(flows.some((flow) => flow.flowType === "SEARCH_SMOKE"), false);
 });
+
+test("flow discovery filters logout/signout links even when label is ambiguous", () => {
+  const snapshot = makeSnapshot({
+    interactive: [
+      {
+        elementId: "nav-dashboard",
+        tag: "a",
+        text: "Dashboard",
+        ariaLabel: "",
+        placeholder: "",
+        name: "",
+        selector: "a[href='/dashboard']",
+        zone: "Header",
+        inViewport: true,
+        disabled: false,
+        href: "https://example.com/dashboard",
+        bounds: { y: 10, viewportY: 10 }
+      },
+      {
+        elementId: "nav-account-exit",
+        tag: "a",
+        text: "Account",
+        ariaLabel: "",
+        placeholder: "",
+        name: "",
+        selector: "a[href='/session-end']",
+        zone: "Header",
+        inViewport: true,
+        disabled: false,
+        href: "https://example.com/session-end",
+        bounds: { y: 14, viewportY: 14 }
+      }
+    ]
+  });
+
+  const flows = discoverFlowCandidates({
+    snapshot,
+    runConfig: {
+      functional: {
+        maxFlows: 4,
+        allowFormSubmit: true
+      }
+    }
+  });
+
+  const flattenedSelectors = flows.flatMap((flow) =>
+    (flow.actions ?? []).map((action) => String(action.selector ?? ""))
+  );
+  assert.equal(flattenedSelectors.some((selector) => selector.includes("session-end")), false);
+});

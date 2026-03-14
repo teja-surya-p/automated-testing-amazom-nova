@@ -407,7 +407,8 @@ export function evaluateCoreFunctionalRules({
   flowBaselineSnapshot = null,
   assertionsConfig = {},
   contractsConfig = {},
-  evidenceRefs = []
+  evidenceRefs = [],
+  allowedRuleIds = null
 }) {
   const rules = [];
 
@@ -574,5 +575,9 @@ export function evaluateCoreFunctionalRules({
     rules.push(thirdPartyFailuresRule);
   }
 
-  return rules;
+  if (!allowedRuleIds) {
+    return rules;
+  }
+  const allowed = allowedRuleIds instanceof Set ? allowedRuleIds : new Set(allowedRuleIds);
+  return rules.filter((rule) => allowed.has(rule.ruleId));
 }

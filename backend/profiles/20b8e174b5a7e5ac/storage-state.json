@@ -1,0 +1,49 @@
+{
+  "cookies": [
+    {
+      "name": "w3s.theme",
+      "value": "null",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1804825707,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.1.530435739.1773275622",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1807849707.093176,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_9YNMTB56NB",
+      "value": "GS2.1.s1773289110$o2$g1$t1773289707$j60$l0$h0",
+      "domain": ".w3schools.com",
+      "path": "/",
+      "expires": 1807849707.093071,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.w3schools.com",
+      "localStorage": [
+        {
+          "name": "preferredpagemode",
+          "value": "null"
+        },
+        {
+          "name": "preferredmode",
+          "value": "null"
+        }
+      ]
+    }
+  ]
+}

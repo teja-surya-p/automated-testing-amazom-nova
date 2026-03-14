@@ -5,6 +5,29 @@ const SEVERITY_ORDER = {
   P3: 3
 };
 
+const UIUX_ISSUE_FAMILY = Object.freeze({
+  HORIZONTAL_SCROLL: "RESPONSIVE_OVERFLOW",
+  TEXT_OVERFLOW_CLIP: "RESPONSIVE_OVERFLOW",
+  LOCALIZATION_OVERFLOW_HINT: "RESPONSIVE_OVERFLOW",
+  MEDIA_SCALING_BROKEN: "RESPONSIVE_OVERFLOW",
+  CLIPPED_PRIMARY_CTA: "RESPONSIVE_OVERFLOW",
+  CTA_PRIORITY_CONFLICT: "CTA_PRESENTATION",
+  DUPLICATE_PRIMARY_CTA_LABELS: "CTA_PRESENTATION",
+  OVERLAPPING_INTERACTIVE_CONTROLS: "LAYOUT_COLLISION",
+  STICKY_OVERLAY_HIDES_CONTENT: "LAYOUT_COLLISION",
+  SEVERE_ALIGNMENT_BREAK: "LAYOUT_COLLISION",
+  OFFSCREEN_PRIMARY_NAV: "NAV_VISIBILITY",
+  BROKEN_PRIMARY_NAV: "NAV_VISIBILITY",
+  INCONSISTENT_PRIMARY_NAV: "NAV_VISIBILITY"
+});
+
+const UIUX_MERGEABLE_FAMILIES = new Set([
+  "RESPONSIVE_OVERFLOW",
+  "CTA_PRESENTATION",
+  "LAYOUT_COLLISION",
+  "NAV_VISIBILITY"
+]);
+
 function safeUrl(url) {
   if (!url || typeof url !== "string") {
     return null;
@@ -66,19 +89,93 @@ function quantizedRegionKey(issue = {}) {
   return `region:${qx}:${qy}:${qw}:${qh}`;
 }
 
+function normalizeSelectorForFingerprint(selector = "") {
+  return String(selector ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/\s*>\s*/g, ">")
+    .replace(/:nth-(child|of-type)\(\d+\)/g, `:nth-$1(#)`)
+    .replace(/:eq\(\d+\)/g, ":eq(#)")
+    .replace(/\[(data-testid|data-test|data-qa)=\"[^\"]+\"\]/g, "[$1]")
+    .slice(0, 220);
+}
+
+function normalizeComponentLabel(issue = {}) {
+  const raw = [
+    issue.exactVisibleText,
+    issue.repro?.actionContext?.label
+  ]
+    .find((value) => String(value ?? "").trim().length > 0) ?? "";
+  return normalizeGroupCause(raw).slice(0, 80);
+}
+
+export function resolveUiuxIssueFamily(issueType = "") {
+  const key = String(issueType ?? "").trim().toUpperCase();
+  return UIUX_ISSUE_FAMILY[key] ?? (key || "UNKNOWN");
+}
+
+function normalizeBreakpointKey(issue = {}) {
+  const range = issue?.breakpointRange ?? null;
+  if (range && Number.isFinite(Number(range.minWidth)) && Number.isFinite(Number(range.maxWidth))) {
+    return `bp:${Math.round(Number(range.minWidth))}-${Math.round(Number(range.maxWidth))}`;
+  }
+  const ranges = Array.isArray(issue?.breakpointRanges) ? issue.breakpointRanges : [];
+  const first = ranges[0];
+  if (first && Number.isFinite(Number(first.minWidth)) && Number.isFinite(Number(first.maxWidth))) {
+    return `bp:${Math.round(Number(first.minWidth))}-${Math.round(Number(first.maxWidth))}`;
+  }
+  return "bp:any";
+}
+
+export function buildUiuxComponentFingerprint(issue = {}) {
+  const selectorKey = normalizeSelectorForFingerprint(issue.affectedSelector ?? "");
+  const regionKey = quantizedRegionKey(issue);
+  const labelKey = normalizeComponentLabel(issue);
+
+  const parts = [];
+  if (selectorKey) {
+    parts.push(`sel:${selectorKey}`);
+  } else if (regionKey !== "region:none") {
+    parts.push(regionKey);
+  }
+  if (labelKey) {
+    parts.push(`lbl:${labelKey}`);
+  }
+
+  if (!parts.length) {
+    parts.push(
+      `fallback:${normalizeGroupCause(
+        issue.summary ??
+          issue.explanation?.whatHappened ??
+          issue.actual ??
+          issue.title ??
+          issue.issueType ??
+          "uiux-issue"
+      ).slice(0, 120)}`
+    );
+  }
+
+  return {
+    key: parts.join("|"),
+    selectorKey,
+    regionKey,
+    labelKey,
+    confidence: selectorKey || regionKey !== "region:none" ? "strong" : "weak"
+  };
+}
+
 export function buildUiuxGroupedCaseKey(issue = {}) {
   const issueType = issue.issueType ?? "UNKNOWN";
+  const issueFamily = resolveUiuxIssueFamily(issueType);
   const normalizedPath = normalizePathFromUrl(issue.affectedUrl ?? issue.url ?? "");
-  const testcaseId = issue.testcaseId ?? issue.issueType ?? "UNKNOWN_TESTCASE";
-  const selectorKey = String(issue.affectedSelector ?? "").trim() || quantizedRegionKey(issue);
-  const cause = normalizeGroupCause(
-    issue.explanation?.whatHappened ??
-      issue.summary ??
-      issue.title ??
-      issue.issueType ??
-      "uiux-issue"
-  );
-  return `${issueType}|${normalizedPath}|${testcaseId}|${selectorKey}|${cause}`;
+  const componentFingerprint = buildUiuxComponentFingerprint(issue);
+  const breakpointKey = normalizeBreakpointKey(issue);
+  const mergeEligible =
+    componentFingerprint.confidence === "strong" &&
+    UIUX_MERGEABLE_FAMILIES.has(issueFamily);
+  const canonicalFamily = mergeEligible ? issueFamily : issueType;
+  return `${canonicalFamily}|${normalizedPath}|${componentFingerprint.key}|${breakpointKey}`;
 }
 
 function buildOccurrence(issue = {}) {

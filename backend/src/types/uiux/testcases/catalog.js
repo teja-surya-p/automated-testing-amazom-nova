@@ -27,10 +27,10 @@ const TESTCASE_METADATA_BY_ID = {
     evidenceRequirements: ["screenshot", "dom"],
     explanationTemplate: {
       whatHappened: "The page width exceeds the current viewport.",
-      whyItMatters: "Content can be clipped and touch interaction becomes unreliable.",
+      whyItMatters: "On mobile, users must pan sideways and can miss critical controls.",
       recommendedFix: [
-        "Constrain responsive containers.",
-        "Wrap or truncate long unbreakable content."
+        "Constrain responsive containers and remove fixed-width pressure.",
+        "Wrap long tokens and prevent nested components from forcing overflow."
       ]
     }
   },
@@ -238,8 +238,8 @@ const TESTCASE_METADATA_BY_ID = {
       whatHappened: "Primary navigation is not reachable in mobile viewport.",
       whyItMatters: "Users lose core wayfinding and navigation.",
       recommendedFix: [
-        "Expose visible menu trigger on small screens.",
-        "Ensure at least one primary nav path is always visible."
+        "Expose a clear visible menu trigger on small screens.",
+        "Keep primary nav controls within viewport bounds and avoid clipped header rows."
       ]
     }
   },
@@ -528,11 +528,11 @@ const TESTCASE_METADATA_BY_ID = {
     deviceScope: "single-viewport",
     evidenceRequirements: ["screenshot"],
     explanationTemplate: {
-      whatHappened: "Header/navigation controls show severe row misalignment.",
-      whyItMatters: "Visual hierarchy and scanning become unreliable.",
+      whatHappened: "Responsive layout blocks drift out of alignment on compact viewport.",
+      whyItMatters: "Users struggle to scan sections and interactive controls when structure collapses.",
       recommendedFix: [
-        "Normalize line-height and container alignment.",
-        "Align header controls to a single baseline row."
+        "Align stacked mobile sections to a consistent content lane.",
+        "Fix breakpoint-specific spacing and collision issues for adjacent blocks."
       ]
     }
   },
@@ -630,6 +630,203 @@ const TESTCASE_METADATA_BY_ID = {
       recommendedFix: [
         "Detect missing critical regions and show explicit fallback errors.",
         "Add render-complete checks for key page sections."
+      ]
+    }
+  },
+  CONSENT_BANNER_BLOCKING_TASK: {
+    title: "Consent/legal overlay blocks core task",
+    category: "trust-conversion",
+    severity: "P1",
+    pageScope: "viewport",
+    deviceScope: "single-viewport",
+    evidenceRequirements: ["screenshot", "dom"],
+    explanationTemplate: {
+      whatHappened: "A consent or legal overlay blocks meaningful task interactions.",
+      whyItMatters: "Compliance UI should not trap users before core actions.",
+      recommendedFix: [
+        "Reduce overlay footprint and ensure easy dismissal.",
+        "Keep primary actions visible and reachable."
+      ]
+    }
+  },
+  ABOVE_FOLD_OVERLOAD: {
+    title: "Above-the-fold overload",
+    category: "clarity",
+    severity: "P2",
+    judgmentPolicy: "advisory",
+    pageScope: "viewport",
+    deviceScope: "multi-viewport",
+    evidenceRequirements: ["screenshot"],
+    explanationTemplate: {
+      whatHappened: "Too many competing controls or overlays appear in first viewport.",
+      whyItMatters: "Users struggle to identify the main next action.",
+      recommendedFix: [
+        "Reduce first-screen message and CTA count.",
+        "Promote one primary action above the fold."
+      ]
+    }
+  },
+  CONTENT_SCANNABILITY_POOR: {
+    title: "Content scannability is weak",
+    category: "content-presentation",
+    severity: "P2",
+    judgmentPolicy: "advisory",
+    pageScope: "viewport",
+    deviceScope: "single-viewport",
+    evidenceRequirements: ["screenshot"],
+    explanationTemplate: {
+      whatHappened: "Long content appears with insufficient heading structure.",
+      whyItMatters: "Users scan before reading deeply and can miss key information.",
+      recommendedFix: [
+        "Break long text with clear headings and lists.",
+        "Highlight key details near the top."
+      ]
+    }
+  },
+  REQUIRED_OPTIONAL_UNCLEAR: {
+    title: "Required vs optional field status unclear",
+    category: "form-ui",
+    severity: "P2",
+    pageScope: "element",
+    deviceScope: "single-viewport",
+    evidenceRequirements: ["screenshot", "a11y"],
+    explanationTemplate: {
+      whatHappened: "A required field lacks explicit required signaling.",
+      whyItMatters: "Users cannot predict validation requirements before submit.",
+      recommendedFix: [
+        "Mark required fields explicitly in labels and ARIA.",
+        "Use consistent required indicators across forms."
+      ]
+    }
+  },
+  INPUT_FORMAT_HELP_MISSING: {
+    title: "Input format guidance missing",
+    category: "form-ui",
+    severity: "P2",
+    judgmentPolicy: "advisory",
+    pageScope: "element",
+    deviceScope: "single-viewport",
+    evidenceRequirements: ["screenshot"],
+    explanationTemplate: {
+      whatHappened: "Constrained input appears without format guidance.",
+      whyItMatters: "Users are forced into trial-and-error validation loops.",
+      recommendedFix: [
+        "Provide examples or helper text before submission.",
+        "Expose accepted format near the field."
+      ]
+    }
+  },
+  TOUCH_TARGET_TOO_SMALL: {
+    title: "Touch target too small",
+    category: "responsive",
+    severity: "P1",
+    pageScope: "element",
+    deviceScope: "multi-viewport",
+    evidenceRequirements: ["screenshot"],
+    explanationTemplate: {
+      whatHappened: "A mobile/tablet control has undersized tap area.",
+      whyItMatters: "Small targets cause mistaps and failed task completion.",
+      recommendedFix: [
+        "Increase target hit area on touch viewports.",
+        "Maintain minimum interactive target dimensions."
+      ]
+    }
+  },
+  GENERIC_ACTION_LABELS: {
+    title: "Action labels are generic",
+    category: "content-presentation",
+    severity: "P2",
+    judgmentPolicy: "advisory",
+    pageScope: "element",
+    deviceScope: "single-viewport",
+    evidenceRequirements: ["screenshot"],
+    explanationTemplate: {
+      whatHappened: "Action text is generic and does not communicate outcome.",
+      whyItMatters: "Vague labels increase hesitation and reduce conversion confidence.",
+      recommendedFix: [
+        "Replace generic labels with outcome-specific wording.",
+        "Differentiate primary and secondary action intent."
+      ]
+    }
+  },
+  IMAGE_MISSING_ALT_UIUX: {
+    title: "Informative image missing alt text",
+    category: "a11y-usability",
+    severity: "P2",
+    pageScope: "element",
+    deviceScope: "single-viewport",
+    evidenceRequirements: ["screenshot", "a11y"],
+    explanationTemplate: {
+      whatHappened: "A visible informative image appears to have empty alt text.",
+      whyItMatters: "Assistive technology users miss equivalent visual context.",
+      recommendedFix: [
+        "Add concise alt text for informative visuals.",
+        "Keep decorative assets explicitly marked as decorative."
+      ]
+    }
+  },
+  HEADING_ORDER_SUSPICIOUS_UIUX: {
+    title: "Heading order is suspicious",
+    category: "a11y-usability",
+    severity: "P2",
+    judgmentPolicy: "advisory",
+    pageScope: "page",
+    deviceScope: "single-viewport",
+    evidenceRequirements: ["screenshot", "a11y"],
+    explanationTemplate: {
+      whatHappened: "Heading structure skips expected level progression.",
+      whyItMatters: "Poor structure harms scanning and assistive navigation.",
+      recommendedFix: [
+        "Maintain progressive heading hierarchy.",
+        "Avoid level jumps unless semantically required."
+      ]
+    }
+  },
+  INTERACTIVE_NAME_MISSING_UIUX: {
+    title: "Interactive control missing name",
+    category: "a11y-usability",
+    severity: "P1",
+    pageScope: "element",
+    deviceScope: "single-viewport",
+    evidenceRequirements: ["screenshot", "a11y"],
+    explanationTemplate: {
+      whatHappened: "A visible interactive control has no meaningful label.",
+      whyItMatters: "Users cannot identify the action purpose reliably.",
+      recommendedFix: [
+        "Add visible text or aria-label.",
+        "Avoid unlabeled icon-only controls for critical actions."
+      ]
+    }
+  },
+  MEDIA_SCALING_BROKEN: {
+    title: "Media scaling breaks layout",
+    category: "responsive",
+    severity: "P1",
+    pageScope: "element",
+    deviceScope: "multi-viewport",
+    evidenceRequirements: ["screenshot"],
+    explanationTemplate: {
+      whatHappened: "Visible media overflows or clips outside viewport bounds.",
+      whyItMatters: "Overflowing media can hide content, clip controls, and break responsive flow on phones.",
+      recommendedFix: [
+        "Apply mobile-safe max-width constraints to media containers.",
+        "Preserve aspect ratio while preventing media from exceeding viewport width."
+      ]
+    }
+  },
+  TABLE_CHART_MOBILE_USABILITY: {
+    title: "Dense data display not usable on mobile",
+    category: "responsive",
+    severity: "P1",
+    pageScope: "viewport",
+    deviceScope: "multi-viewport",
+    evidenceRequirements: ["screenshot"],
+    explanationTemplate: {
+      whatHappened: "Table/chart regions require excessive horizontal panning on smaller viewports.",
+      whyItMatters: "Users lose context and cannot interpret key data comfortably on mobile.",
+      recommendedFix: [
+        "Convert dense tables into stacked cards or compact row summaries on small screens.",
+        "Keep labels/headers visible and avoid forcing excessive side-scroll to read core data."
       ]
     }
   }

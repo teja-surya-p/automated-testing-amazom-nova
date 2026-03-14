@@ -18,6 +18,12 @@ import { resolveSkillPack } from "../skills/index.js";
 import { decideUiuxPaymentWall } from "../types/uiux/paymentWallPolicy.js";
 import { UiuxRunner } from "../types/uiux/uiuxRunner.js";
 import { baselineUiuxChecks } from "../types/uiux/checks/index.js";
+import { normalizeUiuxCheckSelection } from "../types/uiux/handbook/taxonomy.js";
+import {
+  buildPerformanceRunResult,
+  collectPerformanceProbe,
+  resolvePerformanceSettings
+} from "../types/performance/index.js";
 import { baselineA11yRules } from "../types/accessibility/rules/index.js";
 import {
   estimateUiuxPlannedCases,
@@ -35,7 +41,10 @@ import {
   resolveUiuxViewports,
   selectViewportSweepCandidates
 } from "../types/uiux/viewportSweep.js";
-import { resolveUiuxDeviceProfiles } from "../types/uiux/deviceMatrix.js";
+import {
+  analyzeUiuxComponentBreakpoints,
+  resolveUiuxBreakpointSettings
+} from "../types/uiux/componentBreakpointAnalysis.js";
 import { ReportSummarizer } from "../services/reportSummarizer.js";
 import {
   deriveAuthAssistStateFromProbe as deriveAuthAssistState,
@@ -43,6 +52,13 @@ import {
   isAuthAssistReadyToResume,
   mergeDerivedAuthAssistState
 } from "../services/authAssistState.js";
+import { hasVisibleCredentialForm } from "../library/common-tests/authFlowSignals.js";
+import {
+  buildAuthFormMetadata,
+  buildSafeAuthRuntimeMetadata,
+  normalizeSubmittedInputFieldValues,
+  resolveFirstCredentialAlias
+} from "../library/auth-fields/index.js";
 
 function summarizeSemanticAction(snapshot, action) {
   const target = snapshot.interactive.find((item) => item.elementId === action?.elementId) ?? null;
@@ -262,6 +278,10 @@ function isFunctionalMode(runConfig) {
   return runConfig?.testMode === "functional";
 }
 
+function isPerformanceMode(runConfig) {
+  return runConfig?.testMode === "performance";
+}
+
 function normalizeIssueSeverity(severity) {
   return severity ?? "P2";
 }
@@ -314,6 +334,16 @@ function isTerminalStatus(status = "") {
   return ["passed", "failed", "soft-passed", "cancelled"].includes(status);
 }
 
+const ACTIVE_SESSION_STATUSES = new Set([
+  "queued",
+  "running",
+  "waiting-login",
+  "login-assist",
+  "form-assist",
+  "verification-assist",
+  "cancelling"
+]);
+
 class RunStopRequestedError extends Error {
   constructor(message = "Run stop requested by user.") {
     super(message);
@@ -330,28 +360,163 @@ function isLikelyAuthUrl(url = "") {
   return /\/(login|sign[-_]?in|auth|verify|otp|two[-_]?factor)\b/i.test(String(url));
 }
 
-function resolveFirstCredentialAlias(credentials = {}) {
-  const aliases = [
-    credentials?.identifier,
-    credentials?.accessKey,
-    credentials?.access_key,
-    credentials?.username,
-    credentials?.email,
-    credentials?.loginId,
-    credentials?.login_id,
-    credentials?.accountId,
-    credentials?.account_id,
-    credentials?.userId,
-    credentials?.user_id
-  ];
+function isLikelyLogoutUrl(url = "") {
+  return /\/(log(?:out|off)|sign(?:out|[-_]?out)|session[-_]?end|end[-_]?session)\b/i.test(String(url));
+}
 
-  for (const alias of aliases) {
-    const normalized = String(alias ?? "").trim();
-    if (normalized) {
-      return normalized;
-    }
+function normalizeActivityMessage(message = "") {
+  return String(message ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 320);
+}
+
+function buildActionLabel(action = {}) {
+  if (!action || typeof action !== "object") {
+    return "target";
   }
-  return "";
+  return (
+    action.label ??
+    action.targetText ??
+    action.selector ??
+    action.elementId ??
+    action.type ??
+    "target"
+  );
+}
+
+function buildAgentActivityFromEmit(type, payload = {}) {
+  const sessionId = payload?.sessionId;
+  if (!sessionId || type === "session.updated") {
+    return null;
+  }
+
+  const action = payload?.action ?? null;
+  const actionLabel = buildActionLabel(action);
+  const step = Number.isFinite(Number(payload?.step)) ? Number(payload.step) : null;
+  const activityByType = {
+    "audit.starting": {
+      phase: "planner",
+      status: "doing",
+      kind: "audit",
+      message: normalizeActivityMessage(
+        payload?.details || payload?.title || "Evaluating current page state."
+      ),
+      details: {
+        step,
+        phase: payload?.phase ?? "before-action",
+        reason: payload?.details ?? null
+      }
+    },
+    "action.planned": {
+      phase: "flow-selection",
+      status: "planned",
+      kind: "action",
+      message: normalizeActivityMessage(
+        `About to ${action?.type ?? "act"} on "${actionLabel}".`
+      ),
+      details: {
+        step,
+        actionType: action?.type ?? null,
+        targetLabel: actionLabel,
+        reason: payload?.thought ?? null,
+        verification: payload?.verification ?? null
+      }
+    },
+    "action.executed": {
+      phase: "navigation",
+      status: "done",
+      kind: "action",
+      message: normalizeActivityMessage(
+        `Executed ${action?.type ?? "action"} on "${actionLabel}".`
+      ),
+      details: {
+        step,
+        actionType: action?.type ?? null,
+        targetLabel: actionLabel
+      }
+    },
+    "functional.flow.completed": {
+      phase: "functionality",
+      status: payload?.blocked ? "failed" : "done",
+      kind: "flow",
+      message: normalizeActivityMessage(
+        payload?.blocked
+          ? `Flow "${payload?.label ?? payload?.flowId ?? "unknown"}" blocked.`
+          : `Flow "${payload?.label ?? payload?.flowId ?? "unknown"}" completed.`
+      ),
+      details: {
+        flowId: payload?.flowId ?? null,
+        step,
+        blocked: Boolean(payload?.blocked),
+        assertionFailures: Number(payload?.assertionFailures ?? 0)
+      }
+    },
+    "session.cancelled": {
+      phase: "state",
+      status: "done",
+      kind: "session",
+      message: "Run cancelled.",
+      details: {
+        summary: payload?.summary ?? null
+      }
+    },
+    "session.passed": {
+      phase: "state",
+      status: "done",
+      kind: "session",
+      message: "Run finished successfully.",
+      details: {
+        summary: payload?.summary ?? null
+      }
+    },
+    "session.soft-passed": {
+      phase: "state",
+      status: "done",
+      kind: "session",
+      message: "Run finished with blockers (soft-pass).",
+      details: {
+        summary: payload?.summary ?? null
+      }
+    },
+    "session.failed": {
+      phase: "state",
+      status: "failed",
+      kind: "session",
+      message: normalizeActivityMessage(payload?.summary || "Run failed."),
+      details: {
+        summary: payload?.summary ?? null
+      }
+    },
+    bug: {
+      phase: "issue-detection",
+      status: "failed",
+      kind: "bug",
+      message: "Bug report generated from run outcome.",
+      details: {
+        severity: payload?.severity ?? null,
+        type: payload?.type ?? null
+      }
+    },
+    "bug.updated": {
+      phase: "issue-detection",
+      status: "doing",
+      kind: "bug",
+      message: normalizeActivityMessage(payload?.message || "Bug report updated."),
+      details: {
+        source: "update"
+      }
+    }
+  };
+
+  const activity = activityByType[type];
+  if (!activity) {
+    return null;
+  }
+  return {
+    sessionId,
+    entry: activity
+  };
 }
 
 export class QaOrchestrator {
@@ -399,6 +564,26 @@ export class QaOrchestrator {
       return;
     }
     this.testCaseTrackers.delete(sessionId);
+  }
+
+  appendAgentActivity(sessionId, entry, { publish = true } = {}) {
+    if (!sessionId || !entry || typeof this.sessionStore?.appendAgentActivity !== "function") {
+      return null;
+    }
+    const updated = this.sessionStore.appendAgentActivity(sessionId, entry);
+    if (!updated || !publish) {
+      return updated;
+    }
+    const event = Array.isArray(updated.agentActivity)
+      ? updated.agentActivity[updated.agentActivity.length - 1] ?? null
+      : null;
+    if (event) {
+      this.eventBus.publish("agent.activity", {
+        sessionId,
+        event
+      });
+    }
+    return updated;
   }
 
   ensureRunControl(sessionId) {
@@ -464,12 +649,30 @@ export class QaOrchestrator {
       if (!/^https?:/i.test(url)) {
         continue;
       }
-      if (!isLikelyAuthUrl(url)) {
+      if (!isLikelyAuthUrl(url) && !isLikelyLogoutUrl(url)) {
         return url;
       }
     }
 
-    return String(session?.startUrl ?? fallbackUrl ?? "").trim();
+    for (const value of candidateUrls) {
+      const url = String(value ?? "").trim();
+      if (!url || !/^https?:/i.test(url)) {
+        continue;
+      }
+      if (!isLikelyLogoutUrl(url)) {
+        return url;
+      }
+    }
+
+    const startUrl = String(session?.startUrl ?? "").trim();
+    if (startUrl && !isLikelyLogoutUrl(startUrl)) {
+      return startUrl;
+    }
+    const fallback = String(fallbackUrl ?? "").trim();
+    if (fallback && !isLikelyLogoutUrl(fallback)) {
+      return fallback;
+    }
+    return startUrl || fallback;
   }
 
   buildEffectiveBudgets(runConfig = {}) {
@@ -480,27 +683,44 @@ export class QaOrchestrator {
       actionRetryCount: runConfig?.budgets?.actionRetryCount ?? null
     };
 
+    if (isPerformanceMode(runConfig)) {
+      const settings = resolvePerformanceSettings(runConfig);
+      return {
+        generic,
+        performance: {
+          sampleCount: settings.sampleCount,
+          warmupDelayMs: settings.warmupDelayMs,
+          budgets: settings.budgets
+        }
+      };
+    }
+
     if (!isUiuxMode(runConfig)) {
       return { generic };
     }
 
     const uiuxBudget = buildUiuxEffectiveBudget({ runConfig });
-    const deviceCount = resolveUiuxDeviceProfiles(runConfig).length;
+    const breakpointSettings = resolveUiuxBreakpointSettings(runConfig);
     return {
       generic,
       uiux: {
         ...uiuxBudget,
-        deviceCount
+        deviceCount: uiuxBudget.sampledWidthEstimate ?? 0,
+        breakpointSettings
       }
     };
   }
 
   buildQueuedSummary(runConfig = {}, effectiveBudgets = {}) {
+    if (isPerformanceMode(runConfig)) {
+      const sampleCount = effectiveBudgets?.performance?.sampleCount ?? 0;
+      return `Queued performance run with ${sampleCount} sample${sampleCount === 1 ? "" : "s"} and budget-based scoring.`;
+    }
     if (!isUiuxMode(runConfig)) {
       return `Queued ${runConfig?.testMode ?? "default"} run.`;
     }
     const uiuxBudget = effectiveBudgets?.uiux ?? {};
-    return `Queued UI/UX run with timeBudgetMs=${uiuxBudget.timeBudgetMs ?? "n/a"}, maxPages=${uiuxBudget.maxPages ?? "n/a"}, maxInteractionsPerPage=${uiuxBudget.maxInteractionsPerPage ?? "n/a"}, devices=${uiuxBudget.deviceCount ?? "n/a"}.`;
+    return `Queued UI/UX run with breakpoint sweep strategy, timeBudgetMs=${uiuxBudget.timeBudgetMs ?? "n/a"}, maxPages=${uiuxBudget.maxPages ?? "n/a"}, maxInteractionsPerPage=${uiuxBudget.maxInteractionsPerPage ?? "n/a"}, sampledWidths=${uiuxBudget.sampledWidthEstimate ?? "n/a"}.`;
   }
 
   async start({ runConfig }) {
@@ -596,6 +816,7 @@ export class QaOrchestrator {
     const testCaseTracker = this.getTestCaseTracker(sessionId);
     const uiuxMode = isUiuxMode(runConfig);
     const accessibilityMode = isAccessibilityMode(runConfig);
+    const performanceMode = isPerformanceMode(runConfig);
     const coverageMode = isCoverageMode(runConfig);
     const browserSession = new BrowserSession(sessionId, {
       storageStatePath: session.profile?.storageStatePath,
@@ -629,6 +850,9 @@ export class QaOrchestrator {
           maxFlows * maxStepsPerFlow +
           maxFlows * maxStepsPerFlow * estimatedAssertionsPerStep
       );
+    } else if (performanceMode) {
+      const settings = resolvePerformanceSettings(runConfig);
+      testCaseTracker?.planCases(settings.sampleCount);
     } else if (accessibilityMode) {
       const maxPages = Math.max(1, Number(runConfig.accessibility?.maxPages ?? accessibilityStepCap));
       testCaseTracker?.planCases(maxPages * Math.max(accessibilityRuleCount, 1));
@@ -646,7 +870,9 @@ export class QaOrchestrator {
       status: "running",
       summary: "Run in progress.",
       loginAssist: null,
-      authAssist: null
+      authAssist: null,
+      formAssist: null,
+      verificationAssist: null
     });
     this.emitSessionUpdate(sessionId);
 
@@ -725,7 +951,8 @@ export class QaOrchestrator {
             }
           },
           baselineDiff: null,
-          graph: functionalResult.graph
+          graph: functionalResult.graph,
+          websiteDocumentation: functionalResult.websiteDocumentation ?? null
         },
         graph: functionalResult.graph,
         currentUrl: this.sessionStore.getSession(sessionId)?.currentUrl ?? session.startUrl,
@@ -810,6 +1037,18 @@ export class QaOrchestrator {
         blockers: [],
         evidenceQualityScore: 0.9,
         nextBestAction: "REVIEW_FUNCTIONAL_REPORT"
+      });
+      return;
+    }
+
+    if (performanceMode) {
+      this.throwIfStopRequested(sessionId);
+      await this.runPerformanceSession({
+        sessionId,
+        session,
+        runConfig,
+        browserSession,
+        testCaseTracker
       });
       return;
     }
@@ -964,7 +1203,8 @@ export class QaOrchestrator {
         goalFamily: skillPack.id,
         currentStep: step,
         currentUrl: snapshot.url,
-        frame: `data:image/png;base64,${snapshot.screenshotBase64}`
+        frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
+        frameTitle: snapshot.title
       });
       this.sessionStore.appendTimeline(sessionId, {
         type: "frame",
@@ -1779,6 +2019,46 @@ export class QaOrchestrator {
     return this.activeBrowserSessions.get(sessionId) ?? null;
   }
 
+  emitAuthAssistFrame(sessionId, snapshot = null, { phase = "auth-assist" } = {}) {
+    const base64 = snapshot?.screenshotBase64;
+    if (!base64) {
+      return false;
+    }
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      return false;
+    }
+
+    const frameImage = `data:image/png;base64,${base64}`;
+    const fallbackTitle =
+      phase === "after-fill"
+        ? "Authentication input fields filled"
+        : phase === "after-submit"
+          ? "Authentication submit triggered"
+          : "Authentication update";
+    const title = String(snapshot?.title ?? fallbackTitle).trim() || fallbackTitle;
+    const url = String(snapshot?.url ?? session.currentUrl ?? session.startUrl ?? "").trim();
+    const step = session.currentStep ?? null;
+
+    this.sessionStore.patchSession(sessionId, {
+      frame: frameImage,
+      frameTitle: title,
+      currentUrl: url || session.currentUrl
+    });
+    this.emit("frame", {
+      sessionId,
+      step,
+      url: url || session.currentUrl || session.startUrl || null,
+      title,
+      frame: frameImage,
+      spinnerVisible: false,
+      overlays: [],
+      elements: []
+    });
+    this.emitSessionUpdate(sessionId);
+    return true;
+  }
+
   deriveAuthAssistStateFromProbe(probe = {}) {
     return deriveAuthAssistState(probe);
   }
@@ -1828,15 +2108,66 @@ export class QaOrchestrator {
       "awaiting_username",
       "awaiting_password",
       "awaiting_credentials",
+      "awaiting_input_fields",
       "awaiting_otp",
       "auth_step_advanced",
       "auth_unknown_state",
       "submitting_credentials",
+      "submitting_input_fields",
       "submitting_otp",
       "auth_failed"
     ]);
     const nextStatus = status
       ?? (loginAssistStates.has(normalizedState) ? "login-assist" : "running");
+    const normalizedForm = buildAuthFormMetadata({
+      probe,
+      currentForm: current.form ?? null,
+      runtimeMeta
+    });
+    const normalizedRuntime = buildSafeAuthRuntimeMetadata(
+      runtimeMeta,
+      current.runtime ?? null
+    );
+    const normalizedLoginWallStrength = String(
+      normalizedRuntime.loginWallStrength ?? probe?.loginWallStrength ?? "none"
+    ).trim().toLowerCase();
+    const normalizedAuthSignalStrength = String(
+      normalizedRuntime.authenticatedSignalStrength ?? probe?.authenticatedSignalStrength ?? "weak"
+    ).trim().toLowerCase();
+    const normalizedFunctionalPhase = String(
+      normalizedRuntime.currentFunctionalPhase ??
+        (nextStatus === "login-assist" ? "pre_auth" : "authenticated")
+    ).trim().toLowerCase();
+    const authenticatedConfirmedAt =
+      normalizedRuntime.authenticatedConfirmedAt ??
+      (["authenticated", "resumed"].includes(normalizedState)
+        ? current.runtime?.authenticatedConfirmedAt ?? nowIso()
+        : current.runtime?.authenticatedConfirmedAt ?? null);
+    const mode = session.runConfig?.testMode ?? "default";
+    const normalizedCode = String(code ?? current.code ?? "").toUpperCase();
+    const otpPending = Boolean(
+      ["awaiting_otp", "submitting_otp"].includes(normalizedState) ||
+      normalizedCode === "OTP_REQUIRED" ||
+      normalizedCode === "OTP_INVALID"
+    );
+    const credentialsPending = Boolean(
+      !otpPending &&
+      [
+        "awaiting_username",
+        "awaiting_password",
+        "awaiting_credentials",
+        "awaiting_input_fields",
+        "auth_step_advanced",
+        "auth_unknown_state",
+        "submitting_credentials",
+        "submitting_input_fields",
+        "auth_failed"
+      ].includes(normalizedState)
+    );
+    const authPanelEligible = Boolean(
+      !["running", "authenticated", "resumed"].includes(normalizedState) &&
+      (nextStatus === "login-assist" || nextStatus === "waiting-login" || credentialsPending || otpPending)
+    );
     const next = {
       state: normalizedState,
       code: code ?? current.code ?? null,
@@ -1845,53 +2176,8 @@ export class QaOrchestrator {
       site,
       pageUrl,
       loginRequired: !["running", "authenticated", "resumed"].includes(normalizedState),
-      form: {
-        identifierFieldDetected: Boolean(
-          probe?.identifierFieldDetected ??
-            probe?.usernameFieldDetected ??
-            current.form?.identifierFieldDetected
-        ),
-        usernameFieldDetected: Boolean(probe?.usernameFieldDetected ?? probe?.identifierFieldDetected),
-        passwordFieldDetected: Boolean(probe?.passwordFieldDetected),
-        otpFieldDetected: Boolean(probe?.otpFieldDetected),
-        submitControlDetected: Boolean(probe?.submitControlDetected),
-        identifierFilled: Boolean(runtimeMeta?.identifierFilled ?? current.form?.identifierFilled),
-        usernameFilled: Boolean(runtimeMeta?.usernameFilled ?? current.form?.usernameFilled),
-        passwordFilled: Boolean(runtimeMeta?.passwordFilled ?? current.form?.passwordFilled),
-        submitTriggered: Boolean(runtimeMeta?.submitTriggered ?? current.form?.submitTriggered),
-        submitControlType: runtimeMeta?.submitControlType ?? current.form?.submitControlType ?? "none",
-        postSubmitUrlChanged: Boolean(
-          runtimeMeta?.postSubmitUrlChanged ?? current.form?.postSubmitUrlChanged
-        ),
-        postSubmitProbeState:
-          runtimeMeta?.postSubmitProbeState ?? current.form?.postSubmitProbeState ?? null,
-        visibleStep: probe?.visibleStep ?? current.form?.visibleStep ?? null,
-        identifierFieldVisibleCount: Number(
-          probe?.identifierFieldVisibleCount ?? current.form?.identifierFieldVisibleCount ?? 0
-        ),
-        identifierLabelCandidates: Array.isArray(probe?.identifierLabelCandidates)
-          ? probe.identifierLabelCandidates.slice(0, 5)
-          : (current.form?.identifierLabelCandidates ?? []),
-        usernameFieldVisibleCount: Number(probe?.usernameFieldVisibleCount ?? current.form?.usernameFieldVisibleCount ?? 0),
-        passwordFieldVisibleCount: Number(probe?.passwordFieldVisibleCount ?? current.form?.passwordFieldVisibleCount ?? 0),
-        otpFieldVisibleCount: Number(probe?.otpFieldVisibleCount ?? current.form?.otpFieldVisibleCount ?? 0),
-        nextRecommendedAction: probe?.nextRecommendedAction ?? current.form?.nextRecommendedAction ?? null
-      },
-      runtime: {
-        browserActionExecuted: Boolean(
-          runtimeMeta?.browserActionExecuted ?? current.runtime?.browserActionExecuted
-        ),
-        identifierFilled: Boolean(runtimeMeta?.identifierFilled ?? current.runtime?.identifierFilled),
-        usernameFilled: Boolean(runtimeMeta?.usernameFilled ?? current.runtime?.usernameFilled),
-        passwordFilled: Boolean(runtimeMeta?.passwordFilled ?? current.runtime?.passwordFilled),
-        submitTriggered: Boolean(runtimeMeta?.submitTriggered ?? current.runtime?.submitTriggered),
-        submitControlType: runtimeMeta?.submitControlType ?? current.runtime?.submitControlType ?? "none",
-        postSubmitUrlChanged: Boolean(
-          runtimeMeta?.postSubmitUrlChanged ?? current.runtime?.postSubmitUrlChanged
-        ),
-        postSubmitProbeState:
-          runtimeMeta?.postSubmitProbeState ?? current.runtime?.postSubmitProbeState ?? null
-      },
+      form: normalizedForm,
+      runtime: normalizedRuntime,
       startedAt: current.startedAt ?? startedAt ?? nowIso(),
       timeoutMs: timeoutMs ?? current.timeoutMs ?? null,
       remainingMs: remainingMs ?? current.remainingMs ?? null,
@@ -1903,6 +2189,60 @@ export class QaOrchestrator {
       submitAttempted: submitAttempted ?? current.submitAttempted ?? false,
       resumeTriggered: resumeTriggered ?? current.resumeTriggered ?? false,
       resumeRequestedAt: resumeRequestedAt ?? current.resumeRequestedAt ?? null,
+      debug: {
+        authPanelEligible,
+        sessionStatus: nextStatus,
+        mode,
+        authState: normalizedState,
+        credentialsPending,
+        otpPending,
+        identifierFilled: Boolean(normalizedRuntime.identifierFilled),
+        passwordFilled: Boolean(normalizedRuntime.passwordFilled),
+        submitTriggered: Boolean(normalizedRuntime.submitTriggered),
+        submitControlType: normalizedRuntime.submitControlType ?? "none",
+        fieldTargetsResolvedCount: Number(normalizedRuntime.fieldTargetsResolvedCount ?? 0),
+        fieldTargetsFilledCount: Number(normalizedRuntime.fieldTargetsFilledCount ?? 0),
+        fieldTargetsVerifiedCount: Number(normalizedRuntime.fieldTargetsVerifiedCount ?? 0),
+        fillExecutionSucceeded: Boolean(normalizedRuntime.fillExecutionSucceeded),
+        targetedPageUrl: normalizedRuntime.targetedPageUrl ?? pageUrl ?? null,
+        targetedFrameUrl:
+          normalizedRuntime.targetedFrameUrl ??
+          normalizedRuntime.targetedPageUrl ??
+          pageUrl ??
+          null,
+        targetedFrameType: normalizedRuntime.targetedFrameType ?? "unknown",
+        viewerFrameCapturedAfterFill: Boolean(normalizedRuntime.viewerFrameCapturedAfterFill),
+        viewerFrameCapturedAfterSubmit: Boolean(normalizedRuntime.viewerFrameCapturedAfterSubmit),
+        resumeLoopAwakened: Boolean(normalizedRuntime.resumeLoopAwakened),
+        resumeLoopConsumedFields: Boolean(normalizedRuntime.resumeLoopConsumedFields),
+        postSubmitUrl: normalizedRuntime.postSubmitUrl ?? pageUrl ?? null,
+        postSubmitProbeState:
+          normalizedRuntime.postSubmitProbeState ??
+          normalizedForm.postSubmitProbeState ??
+          null,
+        authClassificationReason:
+          normalizedRuntime.authClassificationReason ??
+          probe?.authClassificationReason ??
+          probe?.reason ??
+          null,
+        loginWallStrength: ["none", "weak", "medium", "strong"].includes(normalizedLoginWallStrength)
+          ? normalizedLoginWallStrength
+          : "none",
+        authenticatedSignalStrength: ["none", "weak", "medium", "strong"].includes(normalizedAuthSignalStrength)
+          ? normalizedAuthSignalStrength
+          : "weak",
+        currentFunctionalPhase: ["pre_auth", "authenticated", "final_logout"].includes(normalizedFunctionalPhase)
+          ? normalizedFunctionalPhase
+          : "authenticated",
+        authenticatedConfirmedAt,
+        resumedFromAuth:
+          Boolean(normalizedRuntime.resumedFromAuth) ||
+          normalizedState === "resumed",
+        logoutScheduled: Boolean(normalizedRuntime.logoutScheduled),
+        logoutExecuted: Boolean(normalizedRuntime.logoutExecuted),
+        whyAuthRegressed: normalizedRuntime.whyAuthRegressed ?? null,
+        whyLogoutBlocked: normalizedRuntime.whyLogoutBlocked ?? null
+      },
       updatedAt: nowIso()
     };
 
@@ -1958,9 +2298,11 @@ export class QaOrchestrator {
       "awaiting_username",
       "awaiting_password",
       "awaiting_credentials",
+      "awaiting_input_fields",
       "auth_step_advanced",
       "auth_unknown_state",
       "submitting_credentials",
+      "submitting_input_fields",
       "auth_failed"
     ].includes(state);
   }
@@ -1985,14 +2327,410 @@ export class QaOrchestrator {
       "awaiting_username",
       "awaiting_password",
       "awaiting_credentials",
+      "awaiting_input_fields",
       "awaiting_otp",
       "auth_step_advanced",
       "auth_unknown_state",
       "submitting_credentials",
+      "submitting_input_fields",
       "submitting_otp",
       "auth_failed",
       "auth_skipped"
     ].includes(state);
+  }
+
+  canAcceptAssistAction(session) {
+    if (!session) {
+      return false;
+    }
+    if (isTerminalStatus(session.status)) {
+      return false;
+    }
+    if (session.status === "cancelled" || this.isStopRequested(session.id)) {
+      return false;
+    }
+    return true;
+  }
+
+  async updateSessionFormGroupDescription(sessionId, groupId, { description = "" } = {}) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_FOUND",
+        message: "Session not found."
+      };
+    }
+
+    if (!this.canAcceptAssistAction(session)) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_ACTIVE",
+        message: "Session is not active for form updates.",
+        formAssist: session.formAssist ?? null
+      };
+    }
+
+    const formAssist = session.formAssist ?? null;
+    if (!formAssist || !Array.isArray(formAssist.groups) || formAssist.groups.length === 0) {
+      return {
+        ok: false,
+        code: "FORM_ASSIST_NOT_ACTIVE",
+        message: "No pending form-assist prompts are active for this session.",
+        formAssist: formAssist ?? null
+      };
+    }
+
+    const normalizedGroupId = String(groupId ?? "").trim();
+    if (!normalizedGroupId) {
+      return {
+        ok: false,
+        code: "VALIDATION_ERROR",
+        message: "groupId is required.",
+        formAssist
+      };
+    }
+
+    const updatedGroups = formAssist.groups.map((group) =>
+      group.groupId === normalizedGroupId
+        ? {
+            ...group,
+            description: String(description ?? "").trim() || group.description
+          }
+        : group
+    );
+
+    const found = updatedGroups.some((group) => group.groupId === normalizedGroupId);
+    if (!found) {
+      return {
+        ok: false,
+        code: "FORM_GROUP_NOT_FOUND",
+        message: "Form group not found.",
+        formAssist
+      };
+    }
+
+    const nextFormAssist = {
+      ...formAssist,
+      groups: updatedGroups,
+      updatedAt: nowIso()
+    };
+    const updated = this.sessionStore.patchSession(sessionId, {
+      formAssist: nextFormAssist
+    });
+    this.emitSessionUpdate(sessionId);
+    return {
+      ok: true,
+      code: "FORM_GROUP_DESCRIPTION_UPDATED",
+      message: "Form group description updated.",
+      formAssist: updated?.formAssist ?? nextFormAssist
+    };
+  }
+
+  async submitSessionFormDecision(sessionId, groupId, payload = {}) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_FOUND",
+        message: "Session not found."
+      };
+    }
+
+    if (!this.canAcceptAssistAction(session)) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_ACTIVE",
+        message: "Session is not active for form decisions.",
+        formAssist: session.formAssist ?? null
+      };
+    }
+
+    const formAssist = session.formAssist ?? null;
+    if (!formAssist || !Array.isArray(formAssist.groups) || formAssist.groups.length === 0) {
+      return {
+        ok: false,
+        code: "FORM_ASSIST_NOT_ACTIVE",
+        message: "No pending form-assist prompts are active for this session.",
+        formAssist: formAssist ?? null
+      };
+    }
+
+    const normalizedGroupId = String(groupId ?? "").trim();
+    if (!normalizedGroupId) {
+      return {
+        ok: false,
+        code: "VALIDATION_ERROR",
+        message: "groupId is required.",
+        formAssist
+      };
+    }
+
+    const action = String(payload?.action ?? "").trim().toLowerCase();
+    if (!["submit", "skip", "auto"].includes(action)) {
+      return {
+        ok: false,
+        code: "VALIDATION_ERROR",
+        message: "action must be one of submit, skip, or auto.",
+        formAssist
+      };
+    }
+
+    const group = formAssist.groups.find((entry) => entry.groupId === normalizedGroupId);
+    if (!group) {
+      return {
+        ok: false,
+        code: "FORM_GROUP_NOT_FOUND",
+        message: "Form group not found.",
+        formAssist
+      };
+    }
+
+    const nextDecision = {
+      action,
+      values: payload?.values && typeof payload.values === "object" ? payload.values : {},
+      description:
+        String(payload?.description ?? "").trim() ||
+        String(group.description ?? "").trim(),
+      reason: String(payload?.reason ?? "").trim() || null,
+      decidedAt: nowIso()
+    };
+    const decisions = {
+      ...(formAssist.decisions ?? {}),
+      [normalizedGroupId]: nextDecision
+    };
+    const pendingGroupIds = (formAssist.pendingGroupIds ?? formAssist.groups.map((entry) => entry.groupId))
+      .filter((entry) => entry !== normalizedGroupId);
+
+    const nextFormAssist = {
+      ...formAssist,
+      state: "awaiting_user",
+      decisions,
+      pendingGroupIds,
+      updatedAt: nowIso()
+    };
+    const updated = this.sessionStore.patchSession(sessionId, {
+      formAssist: nextFormAssist
+    });
+    this.emitSessionUpdate(sessionId);
+    return {
+      ok: true,
+      code: "FORM_DECISION_RECORDED",
+      message: "Form decision recorded.",
+      formAssist: updated?.formAssist ?? nextFormAssist
+    };
+  }
+
+  async submitSessionFormGlobalDecision(sessionId, payload = {}) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_FOUND",
+        message: "Session not found."
+      };
+    }
+
+    if (!this.canAcceptAssistAction(session)) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_ACTIVE",
+        message: "Session is not active for form decisions.",
+        formAssist: session.formAssist ?? null
+      };
+    }
+
+    const formAssist = session.formAssist ?? null;
+    if (!formAssist || !Array.isArray(formAssist.groups) || formAssist.groups.length === 0) {
+      return {
+        ok: false,
+        code: "FORM_ASSIST_NOT_ACTIVE",
+        message: "No pending form-assist prompts are active for this session.",
+        formAssist: formAssist ?? null
+      };
+    }
+
+    const action = String(payload?.action ?? "").trim().toLowerCase();
+    if (!["auto-all", "skip-all"].includes(action)) {
+      return {
+        ok: false,
+        code: "VALIDATION_ERROR",
+        message: "action must be auto-all or skip-all.",
+        formAssist
+      };
+    }
+
+    const nextFormAssist = {
+      ...formAssist,
+      globalAction: action,
+      updatedAt: nowIso()
+    };
+    const updated = this.sessionStore.patchSession(sessionId, {
+      formAssist: nextFormAssist
+    });
+    this.emitSessionUpdate(sessionId);
+    return {
+      ok: true,
+      code: "FORM_GLOBAL_DECISION_RECORDED",
+      message: "Form global decision recorded.",
+      formAssist: updated?.formAssist ?? nextFormAssist
+    };
+  }
+
+  async submitSessionVerificationDecision(sessionId, promptId, payload = {}) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_FOUND",
+        message: "Session not found."
+      };
+    }
+
+    if (!this.canAcceptAssistAction(session)) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_ACTIVE",
+        message: "Session is not active for verification decisions.",
+        verificationAssist: session.verificationAssist ?? null
+      };
+    }
+
+    const verificationAssist = session.verificationAssist ?? null;
+    if (!verificationAssist || !Array.isArray(verificationAssist.prompts) || verificationAssist.prompts.length === 0) {
+      return {
+        ok: false,
+        code: "VERIFICATION_ASSIST_NOT_ACTIVE",
+        message: "No pending verification prompts are active for this session.",
+        verificationAssist: verificationAssist ?? null
+      };
+    }
+
+    const normalizedPromptId = String(promptId ?? "").trim();
+    const decision = String(payload?.decision ?? "").trim().toLowerCase();
+    if (!normalizedPromptId) {
+      return {
+        ok: false,
+        code: "VALIDATION_ERROR",
+        message: "promptId is required.",
+        verificationAssist
+      };
+    }
+    if (!["accept-agent", "override-pass", "override-fail"].includes(decision)) {
+      return {
+        ok: false,
+        code: "VALIDATION_ERROR",
+        message: "decision must be accept-agent, override-pass, or override-fail.",
+        verificationAssist
+      };
+    }
+
+    const exists = verificationAssist.prompts.some((prompt) => prompt.promptId === normalizedPromptId);
+    if (!exists) {
+      return {
+        ok: false,
+        code: "VERIFICATION_PROMPT_NOT_FOUND",
+        message: "Verification prompt not found.",
+        verificationAssist
+      };
+    }
+
+    const decisions = {
+      ...(verificationAssist.decisions ?? {}),
+      [normalizedPromptId]: {
+        decision,
+        note: String(payload?.note ?? "").trim() || null,
+        decidedAt: nowIso()
+      }
+    };
+    const pendingPromptIds = (verificationAssist.pendingPromptIds ?? verificationAssist.prompts.map((entry) => entry.promptId))
+      .filter((entry) => entry !== normalizedPromptId);
+
+    const nextVerificationAssist = {
+      ...verificationAssist,
+      decisions,
+      pendingPromptIds,
+      updatedAt: nowIso()
+    };
+    const updated = this.sessionStore.patchSession(sessionId, {
+      verificationAssist: nextVerificationAssist
+    });
+    this.emitSessionUpdate(sessionId);
+    return {
+      ok: true,
+      code: "VERIFICATION_DECISION_RECORDED",
+      message: "Verification decision recorded.",
+      verificationAssist: updated?.verificationAssist ?? nextVerificationAssist
+    };
+  }
+
+  async submitSessionVerificationDecisionAll(sessionId, payload = {}) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_FOUND",
+        message: "Session not found."
+      };
+    }
+
+    if (!this.canAcceptAssistAction(session)) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_ACTIVE",
+        message: "Session is not active for verification decisions.",
+        verificationAssist: session.verificationAssist ?? null
+      };
+    }
+
+    const verificationAssist = session.verificationAssist ?? null;
+    if (!verificationAssist || !Array.isArray(verificationAssist.prompts) || verificationAssist.prompts.length === 0) {
+      return {
+        ok: false,
+        code: "VERIFICATION_ASSIST_NOT_ACTIVE",
+        message: "No pending verification prompts are active for this session.",
+        verificationAssist: verificationAssist ?? null
+      };
+    }
+
+    const decision = String(payload?.decision ?? "").trim().toLowerCase();
+    if (!["accept-agent", "override-pass", "override-fail"].includes(decision)) {
+      return {
+        ok: false,
+        code: "VALIDATION_ERROR",
+        message: "decision must be accept-agent, override-pass, or override-fail.",
+        verificationAssist
+      };
+    }
+
+    const decisions = {
+      ...(verificationAssist.decisions ?? {})
+    };
+    for (const prompt of verificationAssist.prompts) {
+      decisions[prompt.promptId] = {
+        decision,
+        note: String(payload?.note ?? "").trim() || null,
+        decidedAt: nowIso()
+      };
+    }
+
+    const nextVerificationAssist = {
+      ...verificationAssist,
+      globalDecision: decision,
+      decisions,
+      pendingPromptIds: [],
+      updatedAt: nowIso()
+    };
+    const updated = this.sessionStore.patchSession(sessionId, {
+      verificationAssist: nextVerificationAssist
+    });
+    this.emitSessionUpdate(sessionId);
+    return {
+      ok: true,
+      code: "VERIFICATION_DECISION_ALL_RECORDED",
+      message: "Verification decision applied to all prompts.",
+      verificationAssist: updated?.verificationAssist ?? nextVerificationAssist
+    };
   }
 
   async skipSessionAuth(sessionId, { reason = "Credential submission was skipped by user." } = {}) {
@@ -2065,6 +2803,15 @@ export class QaOrchestrator {
       type: "auth-assist",
       message: "Credential entry skipped by user."
     });
+    this.appendAgentActivity(sessionId, {
+      phase: "auth",
+      kind: "skip",
+      status: "blocked",
+      message: "Authentication input was skipped by user request.",
+      details: {
+        reason: skipReason
+      }
+    });
     this.emitSessionUpdate(sessionId);
     return {
       ok: true,
@@ -2072,6 +2819,116 @@ export class QaOrchestrator {
       message: "Authentication step skipped by user.",
       authAssist: authState
     };
+  }
+
+  async submitSessionInputFields(sessionId, { inputFields = {} } = {}) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_FOUND",
+        message: "Session not found."
+      };
+    }
+
+    if (isTerminalStatus(session.status)) {
+      return {
+        ok: false,
+        code: "SESSION_NOT_ACTIVE",
+        message: "Session is already complete.",
+        authAssist: session.authAssist ?? null
+      };
+    }
+
+    if (session.status === "cancelled" || this.isStopRequested(sessionId)) {
+      return {
+        ok: false,
+        code: "RUN_STOPPED",
+        message: "Run has been stopped and cannot accept input fields.",
+        authAssist: session.authAssist ?? null
+      };
+    }
+
+    const normalizedInputFields = normalizeSubmittedInputFieldValues(inputFields);
+    const submittedKeys = Object.keys(normalizedInputFields);
+    if (submittedKeys.length === 0) {
+      return {
+        ok: false,
+        code: "INVALID_AUTH_INPUT_FIELDS",
+        message: "At least one input field value is required."
+      };
+    }
+    this.appendAgentActivity(sessionId, {
+      phase: "input-fill",
+      kind: "submission",
+      status: "doing",
+      message: "Received auth input fields from dashboard.",
+      details: {
+        submittedFieldCount: submittedKeys.length,
+        nextAction: "Normalize and execute browser-side fill/submit."
+      }
+    });
+
+    const detectedInputFields = Array.isArray(session?.authAssist?.form?.inputFields)
+      ? session.authAssist.form.inputFields
+      : [];
+    if (detectedInputFields.length > 0) {
+      const allowedKeys = new Set(
+        detectedInputFields
+          .map((field) => String(field?.key ?? "").trim().toLowerCase())
+          .filter(Boolean)
+      );
+      const compatibilityKeys = new Set([
+        "identifier",
+        "username",
+        "email",
+        "password",
+        "otp",
+        "code",
+        "verification_code"
+      ]);
+      const invalidKeys = submittedKeys.filter((key) => !allowedKeys.has(key) && !compatibilityKeys.has(key));
+      if (invalidKeys.length > 0) {
+        return {
+          ok: false,
+          code: "INVALID_INPUT_FIELD_KEYS",
+          message: `Unknown input field keys: ${invalidKeys.join(", ")}.`,
+          authAssist: session.authAssist ?? null
+        };
+      }
+    }
+
+    const otpDetectedKey =
+      detectedInputFields.find((field) => String(field?.kind ?? "").toLowerCase() === "otp")?.key ?? null;
+    const otpValue =
+      (otpDetectedKey ? normalizedInputFields[otpDetectedKey] : "") ||
+      normalizedInputFields.otp ||
+      normalizedInputFields.code ||
+      normalizedInputFields.verification_code ||
+      "";
+    if (this.canAcceptOtpSubmission(session) && otpValue) {
+      return this.submitSessionOtp(sessionId, {
+        otp: otpValue
+      });
+    }
+
+    const identifierValue = resolveFirstCredentialAlias(normalizedInputFields);
+    const passwordDetectedKey =
+      detectedInputFields.find((field) => String(field?.kind ?? "").toLowerCase() === "password")?.key ?? null;
+    const passwordValue =
+      (passwordDetectedKey ? normalizedInputFields[passwordDetectedKey] : "") ||
+      normalizedInputFields.password ||
+      "";
+
+    return this.submitSessionCredentials(sessionId, {
+      ...normalizedInputFields,
+      inputFields: normalizedInputFields,
+      allowPartialInputFields: true,
+      identifier: identifierValue,
+      username: identifierValue,
+      email: identifierValue,
+      password: passwordValue
+    });
   }
 
   async submitSessionCredentials(sessionId, credentials = {}) {
@@ -2128,9 +2985,33 @@ export class QaOrchestrator {
       };
     }
 
-    const normalizedIdentifier = resolveFirstCredentialAlias(credentials);
-    const normalizedPassword = String(credentials?.password ?? "");
-    if (!normalizedIdentifier || !normalizedPassword) {
+    const normalizedInputFields = normalizeSubmittedInputFieldValues(credentials?.inputFields);
+    const hasDynamicInputFields = Object.keys(normalizedInputFields).length > 0;
+    const allowPartialInputFields = credentials?.allowPartialInputFields === true;
+    const normalizedIdentifier = resolveFirstCredentialAlias({
+      ...normalizedInputFields,
+      ...credentials
+    });
+    const normalizedPassword = String(
+      credentials?.password ??
+      normalizedInputFields.password ??
+      ""
+    );
+    if (
+      !hasDynamicInputFields &&
+      (!normalizedIdentifier || !normalizedPassword)
+    ) {
+      return {
+        ok: false,
+        code: "INVALID_AUTH_INPUT",
+        message: "Both first credential (identifier/username/email) and password are required."
+      };
+    }
+    if (
+      hasDynamicInputFields &&
+      !allowPartialInputFields &&
+      (!normalizedIdentifier || !normalizedPassword)
+    ) {
       return {
         ok: false,
         code: "INVALID_AUTH_INPUT",
@@ -2153,10 +3034,15 @@ export class QaOrchestrator {
           step: session.currentStep ?? 0
         };
       const currentProbe = await browserSession.collectAuthFormProbe();
+      const submittingState = hasDynamicInputFields ? "submitting_input_fields" : "submitting_credentials";
+      const submittingCode = hasDynamicInputFields ? "SUBMITTING_INPUT_FIELDS" : "SUBMITTING_CREDENTIALS";
+      const submittingReason = hasDynamicInputFields
+        ? "Submitting detected input fields to the active auth form."
+        : "Submitting credentials to the active login form.";
       this.patchAuthAssistState(sessionId, {
-        state: "submitting_credentials",
-        code: "SUBMITTING_CREDENTIALS",
-        reason: "Submitting credentials to the active login form.",
+        state: submittingState,
+        code: submittingCode,
+        reason: submittingReason,
         probe: currentProbe,
         source: "api",
         resumeTargetUrl,
@@ -2165,34 +3051,127 @@ export class QaOrchestrator {
         resumeTriggered: false,
         resumeRequestedAt: submissionRequestedAt
       });
-
-      const submission = await browserSession.submitAuthCredentials({
-        identifier: normalizedIdentifier,
-        username: normalizedIdentifier,
-        email: normalizedIdentifier,
-        password: normalizedPassword
+      this.appendAgentActivity(sessionId, {
+        phase: "input-fill",
+        kind: "submission",
+        status: "planned",
+        message: hasDynamicInputFields
+          ? "About to fill detected input fields and submit auth form."
+          : "About to fill credentials and submit auth form.",
+        details: {
+          submittedFieldCount: hasDynamicInputFields
+            ? Object.keys(normalizedInputFields).length
+            : normalizedIdentifier
+              ? 2
+              : 1,
+          reason: submittingReason,
+          resumeTargetUrl
+        }
       });
+
+      const submission =
+        hasDynamicInputFields && typeof browserSession.submitAuthInputFields === "function"
+          ? await browserSession.submitAuthInputFields({
+              inputFields: normalizedInputFields
+            })
+          : await browserSession.submitAuthCredentials({
+              identifier: normalizedIdentifier,
+              username: normalizedIdentifier,
+              email: normalizedIdentifier,
+              password: normalizedPassword
+            });
+      const viewerFrameCapturedAfterFill = this.emitAuthAssistFrame(
+        sessionId,
+        submission?.viewerSnapshots?.afterFill ?? null,
+        { phase: "after-fill" }
+      );
+      const viewerFrameCapturedAfterSubmit = this.emitAuthAssistFrame(
+        sessionId,
+        submission?.viewerSnapshots?.afterSubmit ?? null,
+        { phase: "after-submit" }
+      );
       const submissionRuntimeMeta = {
         browserActionExecuted: Boolean(submission?.browserActionExecuted),
+        inputFieldsConsumed: Boolean(submission?.inputFieldsConsumed),
+        fillExecutionAttempted: Boolean(submission?.fillExecutionAttempted),
+        fillExecutionSucceeded: Boolean(submission?.fillExecutionSucceeded),
+        fieldTargetsResolvedCount: Number(submission?.fieldTargetsResolvedCount ?? 0),
+        fieldTargetsFilledCount: Number(submission?.fieldTargetsFilledCount ?? 0),
+        fieldTargetsVerifiedCount: Number(submission?.fieldTargetsVerifiedCount ?? 0),
+        focusedFieldKeys: Array.isArray(submission?.focusedFieldKeys)
+          ? submission.focusedFieldKeys
+          : [],
         identifierFilled: Boolean(submission?.identifierFilled ?? submission?.usernameFilled),
         usernameFilled: Boolean(submission?.usernameFilled),
         passwordFilled: Boolean(submission?.passwordFilled),
         submitTriggered: Boolean(submission?.submitTriggered),
+        submitControlResolved: Boolean(submission?.submitControlResolved ?? submission?.submitControlDetected),
         submitControlType: submission?.submitControlType ?? "none",
+        submitControlDetected: Boolean(submission?.submitControlDetected),
+        targetedPageUrl:
+          submission?.targetedPageUrl ??
+          submission?.postSubmitUrl ??
+          submission?.probe?.pageUrl ??
+          currentProbe?.pageUrl ??
+          session.currentUrl ??
+          null,
+        targetedFrameUrl:
+          submission?.targetedFrameUrl ??
+          submission?.targetedPageUrl ??
+          submission?.probe?.pageUrl ??
+          currentProbe?.pageUrl ??
+          session.currentUrl ??
+          null,
+        targetedFrameType: submission?.targetedFrameType ?? "unknown",
+        postSubmitUrl: submission?.postSubmitUrl ?? submission?.probe?.pageUrl ?? null,
         postSubmitUrlChanged: Boolean(submission?.postSubmitUrlChanged),
-        postSubmitProbeState: submission?.postSubmitProbeState ?? null
+        postSubmitProbeState: submission?.postSubmitProbeState ?? null,
+        perField: Array.isArray(submission?.perField) ? submission.perField : [],
+        viewerFrameCapturedAfterFill: Boolean(
+          submission?.viewerFrameCapturedAfterFill || viewerFrameCapturedAfterFill
+        ),
+        viewerFrameCapturedAfterSubmit: Boolean(
+          submission?.viewerFrameCapturedAfterSubmit || viewerFrameCapturedAfterSubmit
+        ),
+        resumeLoopAwakened: true,
+        resumeLoopConsumedFields: Boolean(submission?.inputFieldsConsumed)
       };
       this.sessionStore.appendTimeline(sessionId, {
         type: "auth-assist",
         message: [
-          "Credential submit runtime:",
+          hasDynamicInputFields ? "Input-field submit runtime:" : "Credential submit runtime:",
+          `fieldTargetsResolved=${submissionRuntimeMeta.fieldTargetsResolvedCount}`,
+          `fieldTargetsFilled=${submissionRuntimeMeta.fieldTargetsFilledCount}`,
+          `fieldTargetsVerified=${submissionRuntimeMeta.fieldTargetsVerifiedCount}`,
           `identifierFilled=${submissionRuntimeMeta.identifierFilled ? "yes" : "no"}`,
           `passwordFilled=${submissionRuntimeMeta.passwordFilled ? "yes" : "no"}`,
           `submitTriggered=${submissionRuntimeMeta.submitTriggered ? "yes" : "no"}`,
           `submitControlType=${submissionRuntimeMeta.submitControlType}`,
+          `targetedFrameType=${submissionRuntimeMeta.targetedFrameType}`,
+          `viewerAfterFill=${submissionRuntimeMeta.viewerFrameCapturedAfterFill ? "yes" : "no"}`,
+          `viewerAfterSubmit=${submissionRuntimeMeta.viewerFrameCapturedAfterSubmit ? "yes" : "no"}`,
           `postSubmitProbeState=${submissionRuntimeMeta.postSubmitProbeState ?? "unknown"}`,
           `postSubmitUrlChanged=${submissionRuntimeMeta.postSubmitUrlChanged ? "yes" : "no"}`
         ].join(" ")
+      });
+      this.appendAgentActivity(sessionId, {
+        phase: "submit",
+        kind: "auth-submit",
+        status: submissionRuntimeMeta.submitTriggered ? "done" : "failed",
+        message: submissionRuntimeMeta.submitTriggered
+          ? "Auth submit interaction executed; evaluating post-submit state."
+          : "Auth submit interaction did not trigger; staying in input-required state.",
+        details: {
+          fieldTargetsResolvedCount: submissionRuntimeMeta.fieldTargetsResolvedCount,
+          fieldTargetsFilledCount: submissionRuntimeMeta.fieldTargetsFilledCount,
+          fieldTargetsVerifiedCount: submissionRuntimeMeta.fieldTargetsVerifiedCount,
+          submitTriggered: submissionRuntimeMeta.submitTriggered,
+          submitControlType: submissionRuntimeMeta.submitControlType,
+          targetedPageUrl: submissionRuntimeMeta.targetedPageUrl ?? null,
+          targetedFrameType: submissionRuntimeMeta.targetedFrameType ?? "unknown",
+          postSubmitProbeState: submissionRuntimeMeta.postSubmitProbeState ?? "unknown",
+          postSubmitUrlChanged: submissionRuntimeMeta.postSubmitUrlChanged
+        }
       });
       const nextProbe = submission.probe ?? (await browserSession.collectAuthFormProbe());
       const confirmation =
@@ -2209,6 +3188,14 @@ export class QaOrchestrator {
       );
 
       if (authenticated) {
+        const resolvedPostAuthTarget = this.resolveResumeTargetUrl(
+          sessionId,
+          effectiveProbe?.pageUrl ??
+            submission?.postSubmitUrl ??
+            resumeTargetUrl ??
+            session.currentUrl ??
+            session.startUrl
+        );
         await browserSession.persistStorageState();
         if (session.profile) {
           await this.profileManager.saveHealth(session.profile, {
@@ -2224,7 +3211,7 @@ export class QaOrchestrator {
           source: "api",
           endedAt: nowIso(),
           status: "running",
-          resumeTargetUrl,
+          resumeTargetUrl: resolvedPostAuthTarget,
           resumeCheckpoint,
           resumedAt: nowIso(),
           submitAttempted: true,
@@ -2234,7 +3221,17 @@ export class QaOrchestrator {
         });
         this.sessionStore.appendTimeline(sessionId, {
           type: "auth-assist",
-          message: `Credentials accepted and authentication validated. Resuming run target ${resumeTargetUrl}.`
+          message: `Credentials accepted and authentication validated. Resuming run target ${resolvedPostAuthTarget}.`
+        });
+        this.appendAgentActivity(sessionId, {
+          phase: "auth",
+          kind: "classification",
+          status: "done",
+          message: "Authentication validated; resuming authenticated run flow.",
+          details: {
+            resumeTargetUrl: resolvedPostAuthTarget,
+            authState: "authenticated"
+          }
         });
         return {
           ok: true,
@@ -2261,6 +3258,16 @@ export class QaOrchestrator {
         this.sessionStore.appendTimeline(sessionId, {
           type: "auth-assist",
           message: "OTP challenge detected after credential submission."
+        });
+        this.appendAgentActivity(sessionId, {
+          phase: "auth",
+          kind: "classification",
+          status: "doing",
+          message: "OTP challenge detected after submit; awaiting OTP input.",
+          details: {
+            authState: "awaiting_otp",
+            reason: confirmation.reason || null
+          }
         });
         return {
           ok: true,
@@ -2291,6 +3298,15 @@ export class QaOrchestrator {
         this.sessionStore.appendTimeline(sessionId, {
           type: "auth-assist",
           message: "OTP challenge detected after credential submission."
+        });
+        this.appendAgentActivity(sessionId, {
+          phase: "auth",
+          kind: "classification",
+          status: "doing",
+          message: "OTP challenge detected from probe; awaiting OTP input.",
+          details: {
+            authState: "awaiting_otp"
+          }
         });
         return {
           ok: true,
@@ -2344,6 +3360,16 @@ export class QaOrchestrator {
           type: "auth-assist",
           message: derived.reason || "Authentication step advanced."
         });
+        this.appendAgentActivity(sessionId, {
+          phase: "auth",
+          kind: "classification",
+          status: "doing",
+          message: derived.reason || "Authentication step advanced; waiting for next step.",
+          details: {
+            authState: derived.state,
+            code: derived.code ?? "AUTH_STEP_ADVANCED"
+          }
+        });
         return {
           ok: true,
           code: derived.code ?? "AUTH_STEP_ADVANCED",
@@ -2377,11 +3403,54 @@ export class QaOrchestrator {
         Boolean(submission?.submitTriggered) &&
         ["awaiting_credentials", "auth_unknown_state", "running"].includes(derived.state)
       ) {
+        if (!submissionRuntimeMeta.postSubmitUrlChanged) {
+          const pendingState = hasDynamicInputFields ? "submitting_input_fields" : "submitting_credentials";
+          const pendingReason = hasDynamicInputFields
+            ? "Input fields were submitted and submit was triggered. Waiting for deterministic post-submit transition."
+            : "Credentials were submitted and submit was triggered. Waiting for deterministic post-submit transition.";
+          const authState = this.patchAuthAssistState(sessionId, {
+            state: pendingState,
+            code: "AUTH_PENDING_TRANSITION",
+            reason: pendingReason,
+            probe: effectiveProbe,
+            source: "api",
+            resumeTargetUrl,
+            resumeCheckpoint,
+            submitAttempted: true,
+            resumeTriggered: false,
+            runtimeMeta: submissionRuntimeMeta
+          });
+        this.sessionStore.appendTimeline(sessionId, {
+          type: "auth-assist",
+          message:
+            "Submit interaction was observed. Waiting for deterministic post-submit transition signals."
+        });
+        this.appendAgentActivity(sessionId, {
+          phase: "auth",
+          kind: "transition",
+          status: "doing",
+          message: "Submit observed; waiting for deterministic post-submit transition.",
+          details: {
+            authState: pendingState,
+            postSubmitUrlChanged: submissionRuntimeMeta.postSubmitUrlChanged,
+            postSubmitProbeState: submissionRuntimeMeta.postSubmitProbeState ?? "unknown"
+          }
+        });
+        return {
+            ok: true,
+            code: "AUTH_PENDING_TRANSITION",
+            message: pendingReason,
+            authAssist: authState
+          };
+        }
+
         const authState = this.patchAuthAssistState(sessionId, {
-          state: "submitting_credentials",
-          code: "CREDENTIALS_SUBMITTED",
+          state: hasDynamicInputFields ? "submitting_input_fields" : "submitting_credentials",
+          code: hasDynamicInputFields ? "INPUT_FIELDS_SUBMITTED" : "CREDENTIALS_SUBMITTED",
           reason:
-            "Credentials were submitted to the active login form. Waiting for authentication transition.",
+            hasDynamicInputFields
+              ? "Input fields were submitted to the active auth form. Waiting for authentication transition."
+              : "Credentials were submitted to the active login form. Waiting for authentication transition.",
           probe: effectiveProbe,
           source: "api",
           resumeTargetUrl,
@@ -2393,12 +3462,27 @@ export class QaOrchestrator {
         });
         this.sessionStore.appendTimeline(sessionId, {
           type: "auth-assist",
-          message: "Credentials submitted to active login form. Waiting for auth transition."
+          message: hasDynamicInputFields
+            ? "Input fields submitted to active auth form. Waiting for auth transition."
+            : "Credentials submitted to active login form. Waiting for auth transition."
+        });
+        this.appendAgentActivity(sessionId, {
+          phase: "auth",
+          kind: "transition",
+          status: "doing",
+          message: hasDynamicInputFields
+            ? "Input fields submitted; waiting for auth transition."
+            : "Credentials submitted; waiting for auth transition.",
+          details: {
+            authState: hasDynamicInputFields ? "submitting_input_fields" : "submitting_credentials"
+          }
         });
         return {
           ok: true,
-          code: "CREDENTIALS_SUBMITTED",
-          message: "Credentials submitted. Waiting for authentication transition.",
+          code: hasDynamicInputFields ? "INPUT_FIELDS_SUBMITTED" : "CREDENTIALS_SUBMITTED",
+          message: hasDynamicInputFields
+            ? "Input fields submitted. Waiting for authentication transition."
+            : "Credentials submitted. Waiting for authentication transition.",
           authAssist: authState
         };
       }
@@ -2409,7 +3493,9 @@ export class QaOrchestrator {
           code: "AUTH_SUBMIT_NOT_TRIGGERED",
           reason:
             submission?.reason ||
-            "Credentials were entered but no actionable submit transition was triggered.",
+            (hasDynamicInputFields
+              ? "Input fields were entered but no actionable submit transition was triggered."
+              : "Credentials were entered but no actionable submit transition was triggered."),
           probe: effectiveProbe,
           source: "api",
           resumeTargetUrl,
@@ -2423,12 +3509,24 @@ export class QaOrchestrator {
           message:
             "Credential entry completed but no deterministic submit trigger was detected; remaining in awaiting_credentials."
         });
+        this.appendAgentActivity(sessionId, {
+          phase: "submit",
+          kind: "auth-submit",
+          status: "failed",
+          message: "Submit was not triggered after input fill; auth remains awaiting input fields.",
+          details: {
+            authState: "awaiting_credentials",
+            reason: submission?.reason ?? null
+          }
+        });
         return {
           ok: false,
           code: "AUTH_SUBMIT_NOT_TRIGGERED",
           message:
             submission?.reason ||
-            "Credentials were entered but no actionable submit transition was triggered.",
+            (hasDynamicInputFields
+              ? "Input fields were entered but no actionable submit transition was triggered."
+              : "Credentials were entered but no actionable submit transition was triggered."),
           authAssist: authState
         };
       }
@@ -2550,6 +3648,15 @@ export class QaOrchestrator {
         resumeTriggered: false,
         resumeRequestedAt: otpSubmissionRequestedAt
       });
+      this.appendAgentActivity(sessionId, {
+        phase: "auth",
+        kind: "otp",
+        status: "planned",
+        message: "About to submit OTP and verify authenticated session state.",
+        details: {
+          resumeTargetUrl
+        }
+      });
 
       const submission = await browserSession.submitAuthOtp({
         otp: normalizedOtp
@@ -2569,6 +3676,13 @@ export class QaOrchestrator {
       );
 
       if (authenticated) {
+        const resolvedPostAuthTarget = this.resolveResumeTargetUrl(
+          sessionId,
+          effectiveProbe?.pageUrl ??
+            session.currentUrl ??
+            session.startUrl ??
+            resumeTargetUrl
+        );
         await browserSession.persistStorageState();
         if (session.profile) {
           await this.profileManager.saveHealth(session.profile, {
@@ -2584,7 +3698,7 @@ export class QaOrchestrator {
           source: "api",
           endedAt: nowIso(),
           status: "running",
-          resumeTargetUrl,
+          resumeTargetUrl: resolvedPostAuthTarget,
           resumeCheckpoint,
           resumedAt: nowIso(),
           submitAttempted: true,
@@ -2593,7 +3707,16 @@ export class QaOrchestrator {
         });
         this.sessionStore.appendTimeline(sessionId, {
           type: "auth-assist",
-          message: `OTP accepted and authentication validated. Resuming run target ${resumeTargetUrl}.`
+          message: `OTP accepted and authentication validated. Resuming run target ${resolvedPostAuthTarget}.`
+        });
+        this.appendAgentActivity(sessionId, {
+          phase: "auth",
+          kind: "otp",
+          status: "done",
+          message: "OTP accepted; authenticated flow resumed.",
+          details: {
+            resumeTargetUrl: resolvedPostAuthTarget
+          }
         });
         return {
           ok: true,
@@ -2721,6 +3844,42 @@ export class QaOrchestrator {
     };
     const initialProbe = await browserSession.collectAuthFormProbe();
     const initial = this.deriveAuthAssistStateFromProbe(initialProbe);
+    const loginAssistStates = new Set([
+      "awaiting_username",
+      "awaiting_password",
+      "awaiting_credentials",
+      "awaiting_input_fields",
+      "awaiting_otp",
+      "auth_step_advanced",
+      "auth_unknown_state",
+      "submitting_credentials",
+      "submitting_input_fields",
+      "submitting_otp",
+      "auth_failed"
+    ]);
+
+    if (initial.state === "running" && initial.code === "AUTH_NOT_REQUIRED") {
+      this.patchAuthAssistState(sessionId, {
+        state: "running",
+        code: "AUTH_NOT_REQUIRED",
+        reason: initial.reason || `Authentication is not required for ${domain}.`,
+        probe: {
+          ...initialProbe,
+          site: initialProbe.site || domain
+        },
+        timeoutMs,
+        status: "running",
+        source: "probe",
+        resumeTargetUrl: resolvedResumeTargetUrl,
+        resumeCheckpoint: resolvedResumeCheckpoint,
+        resumeTriggered: false
+      });
+      this.sessionStore.appendTimeline(sessionId, {
+        type: "auth-assist",
+        message: `Authentication not required for ${domain}; continuing run.`
+      });
+      return true;
+    }
 
     const attemptResume = async (reason = "Authentication validated and run resumed.") => {
       const authAssistBeforeResume = this.sessionStore.getSession(sessionId)?.authAssist ?? null;
@@ -2793,12 +3952,9 @@ export class QaOrchestrator {
     };
 
     this.patchAuthAssistState(sessionId, {
-      state: initial.state === "running" ? "awaiting_credentials" : initial.state,
-      code: initial.code === "AUTH_NOT_REQUIRED" ? "LOGIN_REQUIRED" : initial.code,
-      reason:
-        initial.code === "AUTH_NOT_REQUIRED"
-          ? `Authentication is required for ${domain}.`
-          : initial.reason,
+      state: initial.state,
+      code: initial.code,
+      reason: initial.reason,
       probe: {
         ...initialProbe,
         site: initialProbe.site || domain
@@ -2806,7 +3962,7 @@ export class QaOrchestrator {
       timeoutMs,
       startedAt: nowIso(),
       remainingMs: timeoutMs,
-      status: "login-assist",
+      status: loginAssistStates.has(initial.state) ? "login-assist" : "running",
       source: "probe",
       resumeTargetUrl: resolvedResumeTargetUrl,
       resumeCheckpoint: resolvedResumeCheckpoint,
@@ -2864,6 +4020,18 @@ export class QaOrchestrator {
           type: "auth-assist",
           message: "Resume check requested; re-validating authentication state."
         });
+        if (currentAuthAssist && typeof currentAuthAssist === "object") {
+          this.patchAuthAssistState(sessionId, {
+            runtimeMeta: {
+              ...(currentAuthAssist.runtime ?? {}),
+              resumeLoopAwakened: true,
+              resumeLoopConsumedFields: Boolean(
+                currentAuthAssist.runtime?.inputFieldsConsumed ?? currentAuthAssist.submitAttempted
+              )
+            },
+            source: currentAuthAssist.source ?? "api"
+          });
+        }
       } else {
         await sleep(config.loginAssistPollMs);
       }
@@ -2915,8 +4083,8 @@ export class QaOrchestrator {
         freshestAuthAssist?.state === derived?.state &&
         freshestAuthAssist?.code === derived?.code;
       this.patchAuthAssistState(sessionId, {
-        state: derived.state === "running" ? "awaiting_credentials" : derived.state,
-        code: derived.code === "AUTH_NOT_REQUIRED" ? "LOGIN_REQUIRED" : derived.code,
+        state: derived.state,
+        code: derived.code,
         reason: derived.reason,
         probe: {
           ...probe,
@@ -2924,11 +4092,19 @@ export class QaOrchestrator {
         },
         timeoutMs,
         remainingMs: Math.max(timeoutMs - elapsedSinceStartMs, 0),
-        status: "login-assist",
+        status: loginAssistStates.has(derived.state) ? "login-assist" : "running",
         source: preserveApiState ? "api" : "probe",
         resumeTargetUrl: resolvedResumeTargetUrl,
         resumeCheckpoint: resolvedResumeCheckpoint
       });
+
+      if (derived.state === "running" && derived.code === "AUTH_NOT_REQUIRED") {
+        this.sessionStore.appendTimeline(sessionId, {
+          type: "auth-assist",
+          message: "Authentication gate is no longer present; continuing run."
+        });
+        return true;
+      }
 
       if (derived.code === "CAPTCHA_BOT_DETECTED") {
         return false;
@@ -3050,6 +4226,55 @@ export class QaOrchestrator {
     };
   }
 
+  async stopAllActiveSessions({ reason = "Run stop requested by user." } = {}) {
+    const activeSessions = this.sessionStore
+      .listSessions()
+      .filter((session) => ACTIVE_SESSION_STATUSES.has(session?.status));
+
+    const requestedSessionIds = [];
+    const failed = [];
+    const results = [];
+
+    for (const session of activeSessions) {
+      const sessionId = session?.id;
+      if (!sessionId) {
+        continue;
+      }
+      requestedSessionIds.push(sessionId);
+      try {
+        const result = await this.stopSession(sessionId, { reason });
+        const normalized = {
+          sessionId,
+          ok: Boolean(result?.ok),
+          code: result?.code ?? "SESSION_STOP_REQUESTED",
+          message: result?.message ?? reason
+        };
+        results.push(normalized);
+        if (!result?.ok) {
+          failed.push(normalized);
+        }
+      } catch (error) {
+        const failure = {
+          sessionId,
+          ok: false,
+          code: error?.code ?? "STOP_REQUEST_FAILED",
+          message: error?.message ?? "Failed to request stop for session."
+        };
+        results.push(failure);
+        failed.push(failure);
+      }
+    }
+
+    return {
+      ok: failed.length === 0,
+      activeFound: activeSessions.length,
+      stoppedCount: Math.max(requestedSessionIds.length - failed.length, 0),
+      requestedSessionIds,
+      failed,
+      results
+    };
+  }
+
   buildUiuxActionContract(action, actionKind = "NAV_CLICK") {
     return {
       actionType: action?.type ?? "click",
@@ -3091,6 +4316,8 @@ export class QaOrchestrator {
     step = 0,
     depth = 0
   }) {
+    const session = this.sessionStore.getSession(sessionId);
+    const continueWithoutAuth = Boolean(session?.uiux?.continueWithoutAuth);
     const authProbe = await browserSession.collectAuthFormProbe().catch(() => null);
     const authState = authProbe ? this.deriveAuthAssistStateFromProbe(authProbe) : null;
     const loginRequiredStates = new Set([
@@ -3105,27 +4332,60 @@ export class QaOrchestrator {
       "LOGIN_PASSWORD_REQUIRED",
       "OTP_REQUIRED"
     ]);
+    const authInputFieldsFromProbe = Array.isArray(authProbe?.inputFields)
+      ? authProbe.inputFields.filter((field) => field && typeof field === "object")
+      : [];
+    const hasAuthInputFieldEvidenceFromProbe = authInputFieldsFromProbe.length > 0;
+    const probeHasCredentialEvidence = Boolean(
+      hasAuthInputFieldEvidenceFromProbe ||
+      authProbe?.identifierFieldDetected ||
+      authProbe?.usernameFieldDetected ||
+      authProbe?.passwordFieldDetected ||
+      authProbe?.otpFieldDetected ||
+      authProbe?.otpChallengeDetected ||
+      Number(authProbe?.identifierFieldVisibleCount ?? authProbe?.usernameFieldVisibleCount ?? 0) > 0 ||
+      Number(authProbe?.passwordFieldVisibleCount ?? 0) > 0 ||
+      Number(authProbe?.otpFieldVisibleCount ?? 0) > 0
+    );
     const loginWallDetectedFromProbe = Boolean(
       authProbe &&
-        (authProbe.loginWallDetected ||
-          authProbe.identifierFieldDetected ||
-          authProbe.usernameFieldDetected ||
+        (
+          authProbe.otpChallengeDetected ||
+          authProbe.captchaDetected ||
           authProbe.passwordFieldDetected ||
-          authProbe.otpFieldDetected)
+          authProbe.otpFieldDetected ||
+          (
+            authProbe.loginWallDetected &&
+            (
+              hasAuthInputFieldEvidenceFromProbe ||
+              authProbe.passwordFieldDetected ||
+              authProbe.otpFieldDetected ||
+              String(authProbe.loginWallStrength ?? "").toLowerCase() === "strong"
+            )
+          )
+        )
     );
     const loginStateFromProbe = Boolean(
       authState &&
         (loginRequiredStates.has(authState.state) || loginRequiredCodes.has(authState.code))
     );
+    const loginRequiredByProbe = Boolean(
+      authProbe &&
+      loginStateFromProbe &&
+      loginWallDetectedFromProbe &&
+      probeHasCredentialEvidence
+    );
+    // Snapshot fallback is only used when probe data is unavailable.
+    // If we have a probe that says there is no credential evidence, do not
+    // regress UI/UX into login-assist from snapshot-only heuristics.
+    const allowSnapshotFallback = !authProbe;
     const loginWallDetectedFromSnapshot = Boolean(
+      allowSnapshotFallback &&
       snapshot &&
         this.snapshotShowsLoginCredentialStep(snapshot)
     );
 
-    if (
-      !(loginWallDetectedFromProbe || loginWallDetectedFromSnapshot) ||
-      !(loginStateFromProbe || loginWallDetectedFromSnapshot)
-    ) {
+    if (!(loginRequiredByProbe || loginWallDetectedFromSnapshot)) {
       return {
         handled: false,
         resumed: false,
@@ -3134,6 +4394,14 @@ export class QaOrchestrator {
     }
 
     const safeCurrentUrl = String(currentUrl || browserSession.getCurrentUrl?.() || "").trim();
+    if (continueWithoutAuth) {
+      return {
+        handled: true,
+        resumed: false,
+        authState
+      };
+    }
+
     const resumed = await this.handleLoginAssist({
       sessionId,
       browserSession,
@@ -3151,6 +4419,29 @@ export class QaOrchestrator {
         url: safeCurrentUrl
       }
     });
+
+    if (!resumed) {
+      const latestSession = this.sessionStore.getSession(sessionId);
+      const authCode = String(latestSession?.authAssist?.code ?? "").trim().toUpperCase();
+      const shouldContinueWithoutAuth = authCode === "LOGIN_ASSIST_TIMEOUT" || authCode === "LOGIN_SKIPPED";
+      if (shouldContinueWithoutAuth) {
+        const currentUiux = latestSession?.uiux ?? {};
+        this.sessionStore.patchSession(sessionId, {
+          uiux: {
+            ...currentUiux,
+            continueWithoutAuth: true
+          }
+        });
+        this.sessionStore.appendTimeline(sessionId, {
+          type: "uiux-auth-mode",
+          message:
+            authCode === "LOGIN_SKIPPED"
+              ? "UI/UX scan will continue without authenticated routes after credential entry was skipped."
+              : "UI/UX scan will continue without authenticated routes after login assist timed out."
+        });
+        this.emitSessionUpdate(sessionId);
+      }
+    }
 
     if (resumed && frontier) {
       const resumedUrl = String(browserSession.getCurrentUrl?.() || safeCurrentUrl).trim();
@@ -3171,61 +4462,49 @@ export class QaOrchestrator {
     };
   }
 
-  snapshotShowsLoginCredentialStep(snapshot = {}) {
-    const formControls = Array.isArray(snapshot.formControls) ? snapshot.formControls : [];
-    const interactive = Array.isArray(snapshot.interactive) ? snapshot.interactive : [];
-    const normalize = (value = "") => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-    const controlText = (control = {}) =>
-      normalize(
-        [
-          control.labelText,
-          control.placeholder,
-          control.ariaLabel,
-          control.name,
-          control.type,
-          control.tag
-        ]
-          .filter(Boolean)
-          .join(" ")
-      );
-    const interactiveText = (entry = {}) =>
-      normalize(
-        [entry.text, entry.ariaLabel, entry.placeholder, entry.name, entry.id, entry.href]
-          .filter(Boolean)
-          .join(" ")
-      );
+  handleUiuxAuthBlockedRoute({ sessionId, frontier, routeUrl, reason = null }) {
+    const session = this.sessionStore.getSession(sessionId);
+    if (!session) {
+      return;
+    }
+    const currentUiux = session.uiux ?? {};
+    const canonicalRoute = frontier?.canonicalize?.(routeUrl) ?? String(routeUrl ?? "").trim();
+    const nextRoutes = [...new Set([...(currentUiux.authBlockedRoutes ?? []), canonicalRoute])].filter(Boolean).slice(-120);
+    const routeWasNew = nextRoutes.length !== (currentUiux.authBlockedRoutes ?? []).length;
 
-    const identifierPattern =
-      /\b(access key|identifier|username|email|login id|account id|user id|member id|portal key|sign[- ]?in id)\b/i;
-    const passwordPattern = /\bpassword|passcode|pin\b/i;
-    const submitPattern =
-      /\b(sign in|log in|login|submit|continue|next|verify|confirm|proceed|access account)\b/i;
-
-    const visibleControls = formControls.filter((control) => control?.inViewport !== false);
-    const visibleInteractive = interactive.filter(
-      (entry) => entry?.inViewport && !entry?.disabled
-    );
-
-    const passwordFieldDetected = visibleControls.some((control) =>
-      passwordPattern.test(controlText(control))
-    );
-    const identifierFieldDetected = visibleControls.some((control) =>
-      identifierPattern.test(controlText(control))
-    );
-    const textLikeFieldDetected = visibleControls.some((control) => {
-      const type = normalize(control.type);
-      const tag = normalize(control.tag);
-      return ["input", "textarea"].includes(tag) && ["", "text", "email", "search"].includes(type);
+    this.sessionStore.patchSession(sessionId, {
+      uiux: {
+        ...currentUiux,
+        continueWithoutAuth: true,
+        authBlockedRoutes: nextRoutes,
+        authBlockedCount: Number(currentUiux.authBlockedCount ?? 0) + 1
+      },
+      summary: "UI/UX scan is continuing while skipping authenticated-only routes."
     });
-    const submitControlDetected = visibleInteractive.some((entry) =>
-      submitPattern.test(interactiveText(entry))
-    );
 
-    return Boolean(
-      passwordFieldDetected &&
-        submitControlDetected &&
-        (identifierFieldDetected || textLikeFieldDetected)
-    );
+    if (routeWasNew && canonicalRoute) {
+      this.sessionStore.appendTimeline(sessionId, {
+        type: "uiux-auth-skip",
+        message: `Skipped authenticated route ${canonicalRoute} and continued scan.${reason ? ` ${reason}` : ""}`
+      });
+      this.appendAgentActivity(sessionId, {
+        phase: "auth",
+        kind: "uiux-auth-skip",
+        status: "blocked",
+        message: "Skipped authenticated-only route and continued UI/UX scan.",
+        details: {
+          routeUrl: canonicalRoute,
+          reason: reason ?? null
+        }
+      });
+    }
+    this.emitSessionUpdate(sessionId);
+  }
+
+  snapshotShowsLoginCredentialStep(snapshot = {}) {
+    return hasVisibleCredentialForm(snapshot, {
+      allowTextLikeFieldFallback: false
+    });
   }
 
   upsertUiuxPageDeviceResult(sessionId, nextEntry) {
@@ -3319,8 +4598,13 @@ export class QaOrchestrator {
     sessionStartAt
   }) {
     const frontier = this.createUiuxFrontier(runConfig, true);
-    const deviceProfiles = resolveUiuxDeviceProfiles(runConfig);
-    const checkIds = baselineUiuxChecks.map((check) => check.id);
+    const breakpointSettings = resolveUiuxBreakpointSettings(runConfig);
+    const configuredCheckIds = normalizeUiuxCheckSelection(runConfig?.uiux?.checkIds ?? []);
+    const checkIds =
+      configuredCheckIds.length > 0
+        ? configuredCheckIds
+        : baselineUiuxChecks.map((check) => check.id);
+    const activeCheckIds = new Set(checkIds);
     const effectiveBudget = buildUiuxEffectiveBudget({ runConfig });
     const maxPages = effectiveBudget.maxPages;
     const maxInteractionsPerPage = effectiveBudget.maxInteractionsPerPage;
@@ -3329,6 +4613,7 @@ export class QaOrchestrator {
     let stepCounter = 0;
     let scannedPages = 0;
     let stoppedByTimeBudget = false;
+    let stoppedByPageBudget = false;
 
     const sessionUiux = this.sessionStore.getSession(sessionId)?.uiux ?? {};
     this.sessionStore.patchSession(sessionId, {
@@ -3336,7 +4621,8 @@ export class QaOrchestrator {
         ...sessionUiux,
         effectiveBudget: {
           ...effectiveBudget,
-          deviceCount: deviceProfiles.length,
+          strategy: "component-breakpoint",
+          breakpointSettings,
           startedAt: nowIso()
         }
       },
@@ -3344,15 +4630,16 @@ export class QaOrchestrator {
         ...(this.sessionStore.getSession(sessionId)?.effectiveBudgets ?? {}),
         uiux: {
           ...effectiveBudget,
-          deviceCount: deviceProfiles.length,
+          strategy: "component-breakpoint",
+          breakpointSettings,
           startedAt: nowIso()
         }
       },
-      summary: `UI/UX run started with timeBudgetMs=${timeBudgetMs}, maxPages=${maxPages}, maxInteractionsPerPage=${maxInteractionsPerPage}, devices=${deviceProfiles.length}.`
+      summary: `UI/UX run started with component breakpoint sweep (min=${breakpointSettings.minWidth}px, max=${breakpointSettings.maxWidth}px, coarse=${breakpointSettings.coarseStep}px, fine=${breakpointSettings.fineStep}px).`
     });
     this.sessionStore.appendTimeline(sessionId, {
       type: "uiux-budget",
-      message: `UI/UX effective budget: timeBudgetMs=${timeBudgetMs}, maxPages=${maxPages}, maxInteractionsPerPage=${maxInteractionsPerPage}, devices=${deviceProfiles.length}, checks=${checkIds.length}.`
+      message: `UI/UX effective budget: timeBudgetMs=${timeBudgetMs}, maxPages=${maxPages}, maxInteractionsPerPage=${maxInteractionsPerPage}, checks=${checkIds.length}, breakpointSweep=${breakpointSettings.minWidth}-${breakpointSettings.maxWidth}px@${breakpointSettings.coarseStep}px (fine ${breakpointSettings.fineStep}px).`
     });
     this.emitSessionUpdate(sessionId);
 
@@ -3403,8 +4690,8 @@ export class QaOrchestrator {
           type: "uiux",
           pageUrl: next.canonicalUrl,
           canonicalUrl: next.canonicalUrl,
-          deviceLabel: deviceProfiles[0]?.label ?? null,
-          deviceId: deviceProfiles[0]?.id ?? null,
+          deviceLabel: `Breakpoint sweep (${breakpointSettings.minWidth}-${breakpointSettings.maxWidth}px)`,
+          deviceId: "breakpoint-sweep",
           caseKind: "VIEWPORT_RENDER",
           expected: "Page should be reachable during UI/UX crawl."
         });
@@ -3414,8 +4701,8 @@ export class QaOrchestrator {
             actual: error?.message ?? "Navigation failed.",
             pageUrl: next.canonicalUrl,
             canonicalUrl: next.canonicalUrl,
-            deviceLabel: deviceProfiles[0]?.label ?? null,
-            deviceId: deviceProfiles[0]?.id ?? null,
+            deviceLabel: `Breakpoint sweep (${breakpointSettings.minWidth}-${breakpointSettings.maxWidth}px)`,
+            deviceId: "breakpoint-sweep",
             evidenceRefs: failureEvidenceRefs
           });
         }
@@ -3438,6 +4725,7 @@ export class QaOrchestrator {
           currentUrl: preAuthSnapshot.url,
           currentStep: stepCounter,
           frame: `data:image/png;base64,${preAuthSnapshot.screenshotBase64}`,
+          frameTitle: preAuthSnapshot.title,
           artifactIndex: browserSession.getArtifactIndex()
         });
         this.updateUiuxCoverage(sessionId, preAuthSnapshot, frontier);
@@ -3459,24 +4747,14 @@ export class QaOrchestrator {
       if (authGate.handled) {
         if (!authGate.resumed) {
           const latestSession = this.sessionStore.getSession(sessionId);
-          const authAssist = latestSession?.authAssist ?? null;
-          const blockerType = authAssist?.code === "LOGIN_SKIPPED" ? "LOGIN_SKIPPED" : "LOGIN_REQUIRED";
-          await this.finalizeSoftPass(sessionId, browserSession, frameBuffer.values(), {
-            blocker: {
-              type: blockerType,
-              confidence: 0.9,
-              rationale:
-                authAssist?.reason ||
-                "Authentication is required and was not completed for UI/UX coverage."
-            },
-            summary:
-              blockerType === "LOGIN_SKIPPED"
-                ? "UI/UX run stopped because credential entry was skipped."
-                : "UI/UX run stopped because authentication is required before safe exploration can continue.",
-            nextBestAction: blockerType === "LOGIN_SKIPPED" ? "LOGIN_SKIPPED" : "WAIT_FOR_LOGIN",
-            evidenceQualityScore: 0.8
+          this.handleUiuxAuthBlockedRoute({
+            sessionId,
+            frontier,
+            routeUrl: String(browserSession.getCurrentUrl?.() || next.canonicalUrl || "").trim(),
+            reason: latestSession?.authAssist?.reason ?? null
           });
-          return;
+          frontier.markVisited(next.canonicalUrl);
+          continue;
         }
 
         const resumedCanonical = frontier.canonicalize(
@@ -3491,187 +4769,305 @@ export class QaOrchestrator {
 
       const visitedCanonical = frontier.markVisited(next.canonicalUrl);
       scannedPages += 1;
-      let interactionSnapshot = null;
-
-      testCaseTracker?.discoverCases(
-        deviceProfiles.length + deviceProfiles.length * checkIds.length
-      );
-
-      const interactionPrimaryDevice =
-        deviceProfiles.find((profile) => ["desktop", "laptop"].includes(profile.deviceClass)) ??
-        deviceProfiles[0] ??
-        null;
-
-      for (const profile of deviceProfiles) {
-        if (shouldStop()) {
-          stoppedByTimeBudget = true;
-          break;
-        }
-
-        await browserSession.applyUiuxDeviceProfile(profile);
-        await browserSession.waitForUIReady(
-          runConfig.readiness.uiReadyStrategy,
-          runConfig.readiness.readyTimeoutMs
-        );
-
+      let interactionSnapshot = preAuthSnapshot ?? null;
+      if (!interactionSnapshot) {
         stepCounter += 1;
-        const snapshot = await browserSession.capture(`uiux-${scannedPages}-${profile.id}-${stepCounter}`, {
-          artifactLabel: `uiux-${scannedPages}-${profile.id}-${stepCounter}`,
-          viewportLabel: profile.label,
-          deviceLabel: profile.label,
-          deviceId: profile.id,
+        interactionSnapshot = await browserSession.capture(`uiux-base-${scannedPages}-${stepCounter}`, {
+          artifactLabel: `uiux-base-${scannedPages}-${stepCounter}`,
           includeFocusProbe: true,
           includeUiuxSignals: true
         });
-        frameBuffer.push(snapshot);
+        frameBuffer.push(interactionSnapshot);
+      }
 
-        this.sessionStore.patchSession(sessionId, {
-          currentUrl: snapshot.url,
-          currentStep: stepCounter,
-          frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
-          artifactIndex: browserSession.getArtifactIndex()
+      testCaseTracker?.discoverCases(1);
+      const breakpointSweepCase = testCaseTracker?.startCase({
+        type: "uiux",
+        pageUrl: next.canonicalUrl,
+        canonicalUrl: next.canonicalUrl,
+        deviceLabel: `Breakpoint sweep (${breakpointSettings.minWidth}-${breakpointSettings.maxWidth}px)`,
+        deviceId: "breakpoint-sweep",
+        caseKind: "BREAKPOINT_SWEEP",
+        expected: "Agent should complete breakpoint scan and responsive issue evaluation for this page."
+      });
+
+      let lastSweepActivityMessage = "";
+      const updateUiuxSweepAction = ({
+        phase = "",
+        captured = 0,
+        total = 0,
+        viewport = null,
+        snapshot = null
+      } = {}) => {
+        const normalizedPhase = String(phase || "").trim().toLowerCase();
+        const hasCount = Number.isFinite(Number(captured)) && Number.isFinite(Number(total)) && Number(total) > 0;
+        const countSegment = hasCount ? ` (${Number(captured)}/${Number(total)})` : "";
+        const viewportSegment =
+          viewport && Number.isFinite(Number(viewport.width)) && Number.isFinite(Number(viewport.height))
+            ? ` @ ${Math.round(Number(viewport.width))}x${Math.round(Number(viewport.height))}`
+            : "";
+        let currentMessage = "Preparing responsive breakpoint sweep.";
+        let nextMessage = "Evaluate viewport snapshots and group component-level issues.";
+
+        if (normalizedPhase === "coarse-capture") {
+          currentMessage = `Capturing coarse responsive sweep${countSegment}${viewportSegment}.`;
+          nextMessage = "Refine around detected transitions.";
+        } else if (normalizedPhase === "coarse-evaluate") {
+          currentMessage = "Evaluating coarse sweep signals for transition candidates.";
+          nextMessage = "Capture refined breakpoint viewports.";
+        } else if (normalizedPhase === "refined-capture") {
+          currentMessage = `Capturing refined breakpoint sweep${countSegment}${viewportSegment}.`;
+          nextMessage = "Validate nearby device-like viewports around failures.";
+        } else if (normalizedPhase === "refined-evaluate") {
+          currentMessage = "Evaluating refined breakpoint snapshots for component issues.";
+          nextMessage = "Validate nearby device-like viewport samples.";
+        } else if (normalizedPhase === "nearby-capture") {
+          currentMessage = `Capturing nearby breakpoint validation${countSegment}${viewportSegment}.`;
+          nextMessage = "Group duplicated failures by component and issue family.";
+        } else if (normalizedPhase === "nearby-evaluate") {
+          currentMessage = "Evaluating nearby viewport validation results.";
+          nextMessage = "Finalize grouped responsive findings.";
+        } else if (normalizedPhase === "done") {
+          currentMessage = "Breakpoint sweep completed for current page.";
+          nextMessage = "Continue safe exploration to next page/component.";
+        }
+
+        const patch = {
+          currentAction: {
+            phase: "uiux",
+            status: normalizedPhase === "done" ? "done" : "doing",
+            message: currentMessage
+          },
+          nextAction: {
+            phase: "uiux",
+            status: normalizedPhase === "done" ? "planned" : "planned",
+            message: nextMessage
+          }
+        };
+        const shouldPublishSweepFrame =
+          (normalizedPhase === "coarse-capture" ||
+            normalizedPhase === "refined-capture" ||
+            normalizedPhase === "nearby-capture") &&
+          typeof snapshot?.screenshotBase64 === "string" &&
+          snapshot.screenshotBase64.length > 0;
+
+        let framePayload = null;
+        if (shouldPublishSweepFrame) {
+          const frameImage = `data:image/png;base64,${snapshot.screenshotBase64}`;
+          const frameTitle = currentMessage;
+          const frameUrl = String(snapshot?.url ?? browserSession.getCurrentUrl?.() ?? next.canonicalUrl ?? "").trim();
+          patch.frame = frameImage;
+          patch.frameTitle = frameTitle;
+          patch.currentUrl = frameUrl || next.canonicalUrl;
+          patch.artifactIndex = browserSession.getArtifactIndex();
+          framePayload = {
+            sessionId,
+            step: stepCounter,
+            url: frameUrl || next.canonicalUrl,
+            title: frameTitle,
+            frame: frameImage,
+            spinnerVisible: Boolean(snapshot?.spinnerVisible),
+            overlays: Array.isArray(snapshot?.overlays) ? snapshot.overlays : [],
+            elements: Array.isArray(snapshot?.interactive) ? snapshot.interactive.slice(0, 18) : []
+          };
+        }
+
+        this.sessionStore.patchSession(sessionId, patch);
+        if (framePayload) {
+          this.emit("frame", framePayload);
+        }
+        if (currentMessage && currentMessage !== lastSweepActivityMessage) {
+          this.appendAgentActivity(sessionId, {
+            phase: "uiux",
+            status: normalizedPhase === "done" ? "done" : "doing",
+            kind: "progress",
+            message: currentMessage,
+            details: {
+              phase: normalizedPhase || "unknown",
+              captured: Number.isFinite(Number(captured)) ? Number(captured) : null,
+              total: Number.isFinite(Number(total)) ? Number(total) : null,
+              viewport:
+                viewport &&
+                Number.isFinite(Number(viewport.width)) &&
+                Number.isFinite(Number(viewport.height))
+                  ? {
+                      width: Math.round(Number(viewport.width)),
+                      height: Math.round(Number(viewport.height))
+                    }
+                  : null
+            }
+          });
+          lastSweepActivityMessage = currentMessage;
+        }
+        this.emitSessionUpdate(sessionId);
+      };
+      updateUiuxSweepAction({
+        phase: "coarse-capture",
+        captured: 0,
+        total: 0
+      });
+
+      const breakpointAnalysis = await analyzeUiuxComponentBreakpoints({
+        browserSession,
+        uiuxRunner,
+        runConfig,
+        baseSnapshot: interactionSnapshot,
+        stage: scannedPages === 1 ? "initial" : "navigation",
+        activeCheckIds,
+        sessionStartAt,
+        shouldStop,
+        onProgress: (progress) => updateUiuxSweepAction(progress)
+      });
+      updateUiuxSweepAction({ phase: "done" });
+      if (breakpointSweepCase?.id) {
+        const hasGroupedFailures = (breakpointAnalysis.groupedIssues ?? []).length > 0;
+        testCaseTracker?.completeCase(breakpointSweepCase.id, {
+          status: hasGroupedFailures ? "failed" : "passed",
+          severity: hasGroupedFailures ? "P2" : "P3",
+          actual: hasGroupedFailures
+            ? "Breakpoint sweep found grouped responsive issues."
+            : "Breakpoint sweep completed without responsive defects on sampled viewports.",
+          pageUrl: next.canonicalUrl,
+          canonicalUrl: next.canonicalUrl,
+          deviceLabel: `Breakpoint sweep (${breakpointSettings.minWidth}-${breakpointSettings.maxWidth}px)`,
+          deviceId: "breakpoint-sweep"
         });
+      }
+      interactionSnapshot = breakpointAnalysis.interactionSnapshot ?? interactionSnapshot;
+      frameBuffer.push(interactionSnapshot);
 
-        this.updateUiuxCoverage(sessionId, snapshot, frontier);
-        const nextDepth = (next.meta?.depth ?? frontier.getDepth(visitedCanonical) ?? 0) + 1;
-        const discoveredLinks = this.collectCandidateLinks(snapshot, runConfig);
-        frontier.pushMany(discoveredLinks, (url) => ({
-          discoveredFrom: snapshot.url,
-          step: stepCounter,
-          url,
-          depth: nextDepth
-        }));
+      const sampledRenderCount = Math.max(1, breakpointAnalysis.pageMatrixEntries.length);
+      testCaseTracker?.discoverCases(sampledRenderCount * (1 + checkIds.length));
 
+      const issueByDeviceAndType = new Map();
+      for (const issue of breakpointAnalysis.groupedIssues) {
+        const devices = issue.representativeDevices ?? [];
+        if (!devices.length) {
+          const key = `${issue.deviceLabel ?? "default"}|${issue.issueType ?? "UNKNOWN"}`;
+          if (!issueByDeviceAndType.has(key)) {
+            issueByDeviceAndType.set(key, issue);
+          }
+          continue;
+        }
+        for (const device of devices) {
+          const key = `${device.label}|${issue.issueType ?? "UNKNOWN"}`;
+          if (!issueByDeviceAndType.has(key)) {
+            issueByDeviceAndType.set(key, issue);
+          }
+        }
+      }
+
+      for (const row of breakpointAnalysis.pageMatrixEntries) {
         const renderCase = testCaseTracker?.startCase({
           type: "uiux",
           caseKind: "VIEWPORT_RENDER",
-          expected: `Page should render on ${profile.label}.`,
-          pageUrl: snapshot.url,
-          canonicalUrl: frontier.canonicalize(snapshot.url),
-          deviceLabel: profile.label,
-          deviceId: profile.id
+          expected: `Page should render on ${row.deviceLabel}.`,
+          pageUrl: row.pageUrl ?? interactionSnapshot.url,
+          canonicalUrl: frontier.canonicalize(row.canonicalUrl ?? interactionSnapshot.url),
+          deviceLabel: row.deviceLabel,
+          deviceId: row.deviceLabel
         });
-        const renderEvidence = buildEvidenceRefs(snapshot, frameBuffer.values());
+        const renderEvidence = buildEvidenceRefs(interactionSnapshot, frameBuffer.values());
         if (renderCase?.id) {
-          if (snapshot.uiReadyState?.timedOut) {
+          if (row.status === "failed") {
             testCaseTracker?.failCase(renderCase.id, {
-              severity: "P1",
-              actual: "UI readiness timed out while rendering this viewport.",
-              explanation: {
-                whatHappened: "Viewport render did not reach ready state in time.",
-                whyItFailed: "The readiness gate timed out for this viewport snapshot.",
-                whyItMatters: "Checks on unstable UI states are unreliable and users experience a stuck screen.",
-                recommendedFix: [
-                  "Investigate long-loading resources and blocking overlays.",
-                  "Stabilize render timing before running UI checks."
-                ]
-              },
-              pageUrl: snapshot.url,
-              canonicalUrl: frontier.canonicalize(snapshot.url),
-              deviceLabel: profile.label,
-              deviceId: profile.id,
+              severity: row.worstSeverity ?? "P2",
+              actual: `Responsive breakpoint sample failed checks: ${(row.failedChecks ?? []).join(", ") || "unknown"}.`,
+              pageUrl: row.pageUrl ?? interactionSnapshot.url,
+              canonicalUrl: frontier.canonicalize(row.canonicalUrl ?? interactionSnapshot.url),
+              deviceLabel: row.deviceLabel,
+              deviceId: row.deviceLabel,
               evidenceRefs: renderEvidence
             });
           } else {
             testCaseTracker?.completeCase(renderCase.id, {
               status: "passed",
-              actual: "Viewport rendered and reached ready state.",
-              pageUrl: snapshot.url,
-              canonicalUrl: frontier.canonicalize(snapshot.url),
-              deviceLabel: profile.label,
-              deviceId: profile.id,
+              actual: "Breakpoint sample rendered and passed selected checks.",
+              pageUrl: row.pageUrl ?? interactionSnapshot.url,
+              canonicalUrl: frontier.canonicalize(row.canonicalUrl ?? interactionSnapshot.url),
+              deviceLabel: row.deviceLabel,
+              deviceId: row.deviceLabel,
               evidenceRefs: renderEvidence
             });
           }
         }
 
-        const issues = uiuxRunner.run({
-          snapshot,
-          stage: scannedPages === 1 ? "initial" : "navigation"
-        });
-        this.recordUiuxIssues(sessionId, issues);
-
-        const issueByType = new Map();
-        for (const issue of issues) {
-          if (!issueByType.has(issue.issueType)) {
-            issueByType.set(issue.issueType, issue);
-          }
-        }
-
-        const failedChecks = [];
-        let deviceWorstSeverity = null;
         for (const checkId of checkIds) {
           const checkCase = testCaseTracker?.startCase({
             type: "uiux",
             caseKind: "UI_CHECK",
-            expected: `${checkId} should not fail on ${profile.label}.`,
-            pageUrl: snapshot.url,
-            canonicalUrl: frontier.canonicalize(snapshot.url),
-            deviceLabel: profile.label,
-            deviceId: profile.id
+            expected: `${checkId} should not fail on ${row.deviceLabel}.`,
+            pageUrl: row.pageUrl ?? interactionSnapshot.url,
+            canonicalUrl: frontier.canonicalize(row.canonicalUrl ?? interactionSnapshot.url),
+            deviceLabel: row.deviceLabel,
+            deviceId: row.deviceLabel
           });
-
-          const issue = issueByType.get(checkId) ?? null;
-          if (issue && checkCase?.id) {
-            const calibratedVerdict =
-              issue.calibratedJudgment?.verdict ??
-              issue.calibratedVerdict ??
-              "FAIL";
-            if (calibratedVerdict === "FAIL") {
-              failedChecks.push(checkId);
-              deviceWorstSeverity = worstSeverity(deviceWorstSeverity, issue.severity ?? "P2");
-              testCaseTracker?.failCase(checkCase.id, {
-                severity: issue.severity ?? "P2",
-                actual: issue.actual,
-                explanation: issue.explanation ?? null,
-                pageUrl: issue.affectedUrl ?? snapshot.url,
-                canonicalUrl: frontier.canonicalize(issue.affectedUrl ?? snapshot.url),
-                deviceLabel: profile.label,
-                deviceId: profile.id,
-                evidenceRefs: ensureScreenshotEvidenceRefs(
-                  [...(issue.evidenceRefs ?? []), ...this.buildOptionalUiuxVideoEvidence(sessionId, issue.severity)],
-                  renderEvidence
-                )
-              });
-            } else {
-              testCaseTracker?.completeCase(checkCase.id, {
-                status: "passed",
-                actual: `${checkId} emitted ${calibratedVerdict} advisory (not a defect).`,
-                pageUrl: issue.affectedUrl ?? snapshot.url,
-                canonicalUrl: frontier.canonicalize(issue.affectedUrl ?? snapshot.url),
-                deviceLabel: profile.label,
-                deviceId: profile.id,
-                evidenceRefs: ensureScreenshotEvidenceRefs(issue.evidenceRefs ?? [], renderEvidence)
-              });
-            }
+          const failed = (row.failedChecks ?? []).includes(checkId);
+          const issue = issueByDeviceAndType.get(`${row.deviceLabel}|${checkId}`) ?? null;
+          if (failed && checkCase?.id) {
+            testCaseTracker?.failCase(checkCase.id, {
+              severity: issue?.severity ?? row.worstSeverity ?? "P2",
+              actual: issue?.actual ?? `${checkId} failed at this responsive breakpoint.`,
+              explanation: issue?.explanation ?? null,
+              pageUrl: issue?.affectedUrl ?? row.pageUrl ?? interactionSnapshot.url,
+              canonicalUrl: frontier.canonicalize(issue?.affectedUrl ?? row.canonicalUrl ?? interactionSnapshot.url),
+              deviceLabel: row.deviceLabel,
+              deviceId: row.deviceLabel,
+              evidenceRefs: ensureScreenshotEvidenceRefs(
+                [...(issue?.evidenceRefs ?? []), ...this.buildOptionalUiuxVideoEvidence(sessionId, issue?.severity)],
+                renderEvidence
+              )
+            });
           } else if (checkCase?.id) {
             testCaseTracker?.completeCase(checkCase.id, {
               status: "passed",
               actual: `${checkId} check passed.`,
-              pageUrl: snapshot.url,
-              canonicalUrl: frontier.canonicalize(snapshot.url),
-              deviceLabel: profile.label,
-              deviceId: profile.id,
+              pageUrl: row.pageUrl ?? interactionSnapshot.url,
+              canonicalUrl: frontier.canonicalize(row.canonicalUrl ?? interactionSnapshot.url),
+              deviceLabel: row.deviceLabel,
+              deviceId: row.deviceLabel,
               evidenceRefs: renderEvidence
             });
           }
         }
 
         this.upsertUiuxPageDeviceResult(sessionId, {
-          pageUrl: snapshot.url,
-          canonicalUrl: frontier.canonicalize(snapshot.url),
-          deviceLabel: profile.label,
-          status: failedChecks.length ? "failed" : "passed",
-          failedChecks,
-          worstSeverity: deviceWorstSeverity ?? "P3",
-          screenshotRef: snapshot.screenshotUrl ?? snapshot.screenshotPath
+          pageUrl: row.pageUrl ?? interactionSnapshot.url,
+          canonicalUrl: frontier.canonicalize(row.canonicalUrl ?? interactionSnapshot.url),
+          deviceLabel: row.deviceLabel,
+          status: row.status,
+          failedChecks: row.failedChecks ?? [],
+          worstSeverity: row.worstSeverity ?? "P3",
+          screenshotRef: row.screenshotRef ?? interactionSnapshot.screenshotUrl ?? interactionSnapshot.screenshotPath
         });
-        this.emitSessionUpdate(sessionId);
-
-        if (!interactionSnapshot || profile.id === interactionPrimaryDevice?.id) {
-          interactionSnapshot = snapshot;
-        }
       }
+
+      this.recordUiuxIssues(sessionId, breakpointAnalysis.groupedIssues);
+
+      this.sessionStore.patchSession(sessionId, {
+        currentUrl: interactionSnapshot.url,
+        currentStep: stepCounter,
+        frame: `data:image/png;base64,${interactionSnapshot.screenshotBase64}`,
+        frameTitle: interactionSnapshot.title,
+        artifactIndex: browserSession.getArtifactIndex(),
+        uiux: {
+          ...(this.sessionStore.getSession(sessionId)?.uiux ?? {}),
+          breakpointSummary: breakpointAnalysis.breakpointSummary,
+          sampledWidths: breakpointAnalysis.sampledWidths,
+          discoveredComponents: (breakpointAnalysis.components ?? []).slice(0, 32)
+        }
+      });
+
+      this.updateUiuxCoverage(sessionId, interactionSnapshot, frontier);
+      const nextDepth = (next.meta?.depth ?? frontier.getDepth(visitedCanonical) ?? 0) + 1;
+      const discoveredLinks = this.collectCandidateLinks(interactionSnapshot, runConfig);
+      frontier.pushMany(discoveredLinks, (url) => ({
+        discoveredFrom: interactionSnapshot.url,
+        step: stepCounter,
+        url,
+        depth: nextDepth
+      }));
+      this.emitSessionUpdate(sessionId);
 
       if (shouldStop() || !interactionSnapshot) {
         if (shouldStop()) {
@@ -3693,24 +5089,13 @@ export class QaOrchestrator {
       if (authBeforeInteractions.handled) {
         if (!authBeforeInteractions.resumed) {
           const latestSession = this.sessionStore.getSession(sessionId);
-          const authAssist = latestSession?.authAssist ?? null;
-          const blockerType = authAssist?.code === "LOGIN_SKIPPED" ? "LOGIN_SKIPPED" : "LOGIN_REQUIRED";
-          await this.finalizeSoftPass(sessionId, browserSession, frameBuffer.values(), {
-            blocker: {
-              type: blockerType,
-              confidence: 0.9,
-              rationale:
-                authAssist?.reason ||
-                "Authentication is required and was not completed for UI/UX coverage."
-            },
-            summary:
-              blockerType === "LOGIN_SKIPPED"
-                ? "UI/UX run stopped because credential entry was skipped."
-                : "UI/UX run stopped because authentication is required before safe exploration can continue.",
-            nextBestAction: blockerType === "LOGIN_SKIPPED" ? "LOGIN_SKIPPED" : "WAIT_FOR_LOGIN",
-            evidenceQualityScore: 0.8
+          this.handleUiuxAuthBlockedRoute({
+            sessionId,
+            frontier,
+            routeUrl: interactionSnapshot?.url ?? visitedCanonical,
+            reason: latestSession?.authAssist?.reason ?? null
           });
-          return;
+          continue;
         }
         continue;
       }
@@ -3806,6 +5191,7 @@ export class QaOrchestrator {
             currentUrl: postSnapshot.url,
             currentStep: stepCounter,
             frame: `data:image/png;base64,${postSnapshot.screenshotBase64}`,
+            frameTitle: postSnapshot.title,
             artifactIndex: browserSession.getArtifactIndex()
           });
           this.updateUiuxCoverage(sessionId, postSnapshot, frontier);
@@ -3836,24 +5222,26 @@ export class QaOrchestrator {
           if (authAfterInteraction.handled) {
             if (!authAfterInteraction.resumed) {
               const latestSession = this.sessionStore.getSession(sessionId);
-              const authAssist = latestSession?.authAssist ?? null;
-              const blockerType = authAssist?.code === "LOGIN_SKIPPED" ? "LOGIN_SKIPPED" : "LOGIN_REQUIRED";
-              await this.finalizeSoftPass(sessionId, browserSession, frameBuffer.values(), {
-                blocker: {
-                  type: blockerType,
-                  confidence: 0.9,
-                  rationale:
-                    authAssist?.reason ||
-                    "Authentication is required and was not completed for UI/UX coverage."
-                },
-                summary:
-                  blockerType === "LOGIN_SKIPPED"
-                    ? "UI/UX run stopped because credential entry was skipped."
-                    : "UI/UX run stopped because authentication is required before safe exploration can continue.",
-                nextBestAction: blockerType === "LOGIN_SKIPPED" ? "LOGIN_SKIPPED" : "WAIT_FOR_LOGIN",
-                evidenceQualityScore: 0.8
+              this.handleUiuxAuthBlockedRoute({
+                sessionId,
+                frontier,
+                routeUrl: postSnapshot?.url ?? visitedCanonical,
+                reason: latestSession?.authAssist?.reason ?? null
               });
-              return;
+              if (interactionCase?.id) {
+                testCaseTracker?.completeCase(interactionCase.id, {
+                  status: "skipped",
+                  severity: "P3",
+                  actual: latestSession?.authAssist?.reason ?? "Interaction skipped due to authentication gate.",
+                  pageUrl: postSnapshot?.url ?? interactionSnapshot.url,
+                  canonicalUrl: frontier.canonicalize(postSnapshot?.url ?? interactionSnapshot.url),
+                  deviceLabel: postSnapshot?.deviceLabel ?? postSnapshot?.viewportLabel ?? null,
+                  deviceId: postSnapshot?.deviceId ?? null,
+                  evidenceRefs: buildEvidenceRefs(postSnapshot ?? interactionSnapshot, frameBuffer.values())
+                });
+              }
+              authTransitionHandled = true;
+              break;
             }
             authTransitionHandled = true;
             break;
@@ -3904,6 +5292,14 @@ export class QaOrchestrator {
       }
     }
 
+    if (!stoppedByTimeBudget && scannedPages >= maxPages && frontier?.hasNext()) {
+      stoppedByPageBudget = true;
+      this.sessionStore.appendTimeline(sessionId, {
+        type: "uiux-page-cap",
+        message: `UI/UX run reached maxPages=${maxPages} while additional pages remained in the frontier. Increase runConfig.uiux.maxPages to continue coverage.`
+      });
+    }
+
     if (stoppedByTimeBudget) {
       await this.finalizeSoftPass(sessionId, browserSession, frameBuffer.values(), {
         blocker: {
@@ -3925,11 +5321,21 @@ export class QaOrchestrator {
     const failingList = failingNames.slice(0, 25).join(", ");
     const failingOverflowSuffix =
       failingNames.length > 25 ? ` (+${failingNames.length - 25} more)` : "";
-    const summary = [
+    const summaryParts = [
       `UI/UX scan completed across ${finalSession?.uiux?.pagesVisited?.length ?? scannedPages} page(s).`,
-      `Passed on ${deviceSummary.length - failingDevices.length} device(s), failed on ${failingDevices.length} device(s).`,
-      failingDevices.length ? `Failing devices: ${failingList}${failingOverflowSuffix}.` : "No failing devices detected."
-    ].join(" ");
+      `Passed on ${deviceSummary.length - failingDevices.length} breakpoint sample(s), failed on ${failingDevices.length} sample(s).`,
+      failingDevices.length ? `Failing samples: ${failingList}${failingOverflowSuffix}.` : "No failing breakpoint samples detected."
+    ];
+    const authBlockedCount = Number(finalSession?.uiux?.authBlockedCount ?? 0);
+    if (authBlockedCount > 0) {
+      summaryParts.push(`Skipped ${authBlockedCount} authenticated-only route(s) and continued public UI/UX coverage.`);
+    }
+    if (stoppedByPageBudget) {
+      summaryParts.push(
+        `Coverage stopped at maxPages=${maxPages} while additional pages remained. Increase runConfig.uiux.maxPages to continue the scan.`
+      );
+    }
+    const summary = summaryParts.join(" ");
 
     await this.finalizeSuccess(sessionId, browserSession, {
       summary,
@@ -4040,13 +5446,15 @@ export class QaOrchestrator {
     stage,
     actionResult = null,
     actionContext = null,
+    activeCheckIds = null,
     sessionStartAt
   }) {
     const issues = uiuxRunner.run({
       snapshot: baseSnapshot,
       stage,
       actionResult,
-      actionContext
+      actionContext,
+      activeCheckIds
     });
 
     const originalViewport = browserSession.getViewportSize() ?? {
@@ -4078,7 +5486,8 @@ export class QaOrchestrator {
           snapshot: sweepSnapshot,
           stage,
           actionResult,
-          actionContext
+          actionContext,
+          activeCheckIds
         })
       );
     }
@@ -4645,6 +6054,177 @@ export class QaOrchestrator {
     };
   }
 
+  async runPerformanceSession({
+    sessionId,
+    session,
+    runConfig,
+    browserSession,
+    testCaseTracker
+  }) {
+    const settings = resolvePerformanceSettings(runConfig);
+    const frames = [];
+    const probes = [];
+    const sampleCount = settings.sampleCount;
+
+    this.sessionStore.patchSession(sessionId, {
+      summary: `Collecting ${sampleCount} performance sample${sampleCount === 1 ? "" : "s"}.`
+    });
+    this.emitSessionUpdate(sessionId);
+
+    for (let index = 0; index < sampleCount; index += 1) {
+      this.throwIfStopRequested(sessionId);
+      const step = index + 1;
+
+      if (index > 0) {
+        await browserSession.goto(session.startUrl);
+      }
+
+      await browserSession.waitForUIReady(
+        runConfig.readiness?.uiReadyStrategy ?? "networkidle-only",
+        runConfig.readiness?.readyTimeoutMs ?? config.networkIdleTimeoutMs
+      );
+      if (settings.warmupDelayMs > 0) {
+        await sleep(settings.warmupDelayMs);
+      }
+
+      const snapshot = await browserSession.capture(step);
+      frames.push(snapshot);
+      testCaseTracker?.discoverCases(1);
+      const sampleCase = testCaseTracker?.startCase({
+        type: "performance",
+        caseKind: "PERFORMANCE_SAMPLE",
+        pageUrl: snapshot.url,
+        canonicalUrl: snapshot.canonicalUrl ?? snapshot.url,
+        deviceLabel: snapshot.viewportLabel ?? null,
+        expected: "Collect deterministic performance metrics for this sample.",
+        evidenceRefs: buildEvidenceRefs(snapshot, frames)
+      });
+
+      const probe = await collectPerformanceProbe(browserSession.page, {
+        step,
+        targetUrl: snapshot.url
+      });
+      if (probe) {
+        probes.push(probe);
+      }
+
+      if (sampleCase?.id) {
+        testCaseTracker?.completeCase(sampleCase.id, {
+          status: probe ? "passed" : "failed",
+          pageUrl: snapshot.url,
+          canonicalUrl: snapshot.canonicalUrl ?? snapshot.url,
+          deviceLabel: snapshot.viewportLabel ?? null,
+          actual: probe
+            ? "Performance metrics captured for this sample."
+            : "Unable to capture performance metrics for this sample.",
+          evidenceRefs: buildEvidenceRefs(snapshot, frames)
+        });
+      }
+
+      this.sessionStore.patchSession(sessionId, {
+        currentStep: step,
+        currentUrl: snapshot.url,
+        frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
+        frameTitle: snapshot.title,
+        artifactIndex: browserSession.getArtifactIndex(),
+        summary: `Captured performance sample ${step}/${sampleCount}.`
+      });
+      this.sessionStore.appendTimeline(sessionId, {
+        type: "performance",
+        message: probe
+          ? `Captured performance sample ${step}/${sampleCount}.`
+          : `Performance sample ${step}/${sampleCount} did not return metrics.`
+      });
+      this.emit("frame", {
+        sessionId,
+        step,
+        url: snapshot.url,
+        title: snapshot.title,
+        frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
+        spinnerVisible: snapshot.spinnerVisible,
+        overlays: snapshot.overlays,
+        elements: snapshot.interactive.slice(0, 18)
+      });
+      this.emitSessionUpdate(sessionId);
+    }
+
+    const performanceResult = buildPerformanceRunResult({
+      samples: probes,
+      networkSummary: browserSession.networkSummary,
+      settings
+    });
+
+    this.sessionStore.patchSession(sessionId, {
+      performance: performanceResult,
+      summary: performanceResult.summaryText ?? "Performance scan completed.",
+      artifactIndex: browserSession.getArtifactIndex()
+    });
+
+    for (const issue of performanceResult.failures ?? performanceResult.issues ?? []) {
+      this.recordIncident(sessionId, {
+        type: issue.issueType,
+        severity: normalizeIssueSeverity(issue.severity),
+        title: issue.title,
+        details: issue.actual,
+        confidence: issue.confidence,
+        evidenceRefs: buildEvidenceRefs(frames.at(-1) ?? {}, frames),
+        affectedUrl: issue.affectedUrl ?? session.startUrl,
+        recoveryAttempts: []
+      });
+    }
+
+    if (performanceResult.status === "failed") {
+      await this.finalizeBug(
+        sessionId,
+        browserSession,
+        frames,
+        {
+          type: "performance-metrics-capture-failed",
+          severity: "P1",
+          summary: "Performance run failed to capture metrics from the active page.",
+          evidencePrompt: "Review performance probe capture steps and browser artifacts."
+        },
+        {
+          targetAchieved: false,
+          blockers: [
+            {
+              type: "PERFORMANCE_METRICS_CAPTURE_FAILED",
+              confidence: 0.8,
+              rationale: "No valid performance samples were captured."
+            }
+          ],
+          evidenceQualityScore: 0.8,
+          nextBestAction: "RETRY_PERFORMANCE_RUN"
+        }
+      );
+      return;
+    }
+
+    if ((performanceResult.failures ?? performanceResult.issues ?? []).length > 0) {
+      const failures = performanceResult.failures ?? performanceResult.issues ?? [];
+      const topIssue = failures[0];
+      await this.finalizeSoftPass(sessionId, browserSession, frames, {
+        blocker: {
+          type: "PERFORMANCE_BUDGET_EXCEEDED",
+          confidence: topIssue?.confidence ?? 0.9,
+          rationale: performanceResult.summaryText ?? "Performance thresholds were exceeded."
+        },
+        summary: performanceResult.summaryText ?? "Performance thresholds were exceeded.",
+        nextBestAction: "REVIEW_PERFORMANCE_REPORT",
+        evidenceQualityScore: 0.86
+      });
+      return;
+    }
+
+    await this.finalizeSuccess(sessionId, browserSession, {
+      summary: performanceResult.summaryText ?? "Performance scan completed successfully.",
+      targetAchieved: true,
+      blockers: [],
+      evidenceQualityScore: 0.9,
+      nextBestAction: "REVIEW_PERFORMANCE_REPORT"
+    });
+  }
+
   buildEvidenceArtifactEntry(sessionId, evidence) {
     if (!evidence?.videoUrl && !evidence?.path) {
       return null;
@@ -4848,8 +6428,14 @@ export class QaOrchestrator {
     const authAssistPatch = currentSession?.authAssist
       ? {
           ...currentSession.authAssist,
-          state: currentSession.authAssist.state === "resumed" ? "resumed" : "auth_failed",
-          code: currentSession.authAssist.code ?? blockerOrFallback.type,
+          state: isAuthAssistReadyToResume(currentSession.authAssist)
+            ? currentSession.authAssist.state ?? "authenticated"
+            : currentSession.authAssist.state === "resumed"
+              ? "resumed"
+              : "auth_failed",
+          code: isAuthAssistReadyToResume(currentSession.authAssist)
+            ? currentSession.authAssist.code ?? "AUTH_VALIDATED"
+            : currentSession.authAssist.code ?? blockerOrFallback.type,
           reason: currentSession.authAssist.reason ?? summary,
           endedAt: currentSession.authAssist.endedAt ?? nowIso(),
           updatedAt: nowIso()
@@ -5129,5 +6715,12 @@ export class QaOrchestrator {
 
   emit(type, payload) {
     this.eventBus.publish(type, payload);
+    if (type === "agent.activity") {
+      return;
+    }
+    const activity = buildAgentActivityFromEmit(type, payload);
+    if (activity) {
+      this.appendAgentActivity(activity.sessionId, activity.entry);
+    }
   }
 }

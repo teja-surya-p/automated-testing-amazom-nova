@@ -181,6 +181,55 @@ test("deriveAuthAssistStateFromProbe yields auth_unknown_state when submission t
   assert.equal(state.code, "AUTH_UNKNOWN_STATE");
 });
 
+test("deriveAuthAssistStateFromProbe ignores weak identifier-only hints in authenticated context", () => {
+  const state = deriveAuthAssistStateFromProbe(
+    {
+      pageUrl: "https://example.com/dashboard",
+      loginWallDetected: false,
+      loginWallStrength: "weak",
+      usernameFieldDetected: true,
+      identifierFieldDetected: true,
+      passwordFieldDetected: false,
+      otpFieldDetected: false,
+      visibleStep: "unknown",
+      authenticatedHint: true,
+      authenticatedSignalStrength: "strong"
+    },
+    {
+      previousProbe: {
+        pageUrl: "https://example.com/dashboard",
+        loginWallDetected: false,
+        visibleStep: "authenticated"
+      },
+      submission: {
+        submitTriggered: false
+      }
+    }
+  );
+
+  assert.equal(state.state, "authenticated");
+  assert.equal(state.code, "AUTH_VALIDATED");
+});
+
+test("deriveAuthAssistStateFromProbe does not force login-required from credentials step without field evidence", () => {
+  const state = deriveAuthAssistStateFromProbe({
+    pageUrl: "https://www.w3schools.com/",
+    loginWallDetected: true,
+    loginWallStrength: "medium",
+    usernameFieldDetected: false,
+    identifierFieldDetected: false,
+    passwordFieldDetected: false,
+    otpFieldDetected: false,
+    submitControlDetected: true,
+    visibleStep: "credentials",
+    inputFields: [],
+    authenticatedHint: false
+  });
+
+  assert.equal(state.state, "running");
+  assert.equal(state.code, "AUTH_NOT_REQUIRED");
+});
+
 test("isAuthAssistReadyToResume returns true for authenticated and AUTH_VALIDATED states", () => {
   assert.equal(
     isAuthAssistReadyToResume({
@@ -254,4 +303,24 @@ test("mergeDerivedAuthAssistState preserves api submitting state against generic
 
   assert.equal(merged.state, "submitting_credentials");
   assert.equal(merged.code, "CREDENTIALS_SUBMITTED");
+});
+
+test("mergeDerivedAuthAssistState preserves submitting_input_fields against generic fallback", () => {
+  const merged = mergeDerivedAuthAssistState({
+    currentAuthAssist: {
+      state: "submitting_input_fields",
+      code: "AUTH_PENDING_TRANSITION",
+      source: "api",
+      reason: "Input fields submitted."
+    },
+    derivedState: {
+      state: "awaiting_credentials",
+      code: "LOGIN_REQUIRED",
+      reason: "Login required."
+    }
+  });
+
+  assert.equal(merged.state, "submitting_input_fields");
+  assert.equal(merged.code, "AUTH_PENDING_TRANSITION");
+  assert.equal(merged.reason, "Input fields submitted.");
 });

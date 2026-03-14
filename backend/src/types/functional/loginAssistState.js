@@ -25,13 +25,9 @@ export function decideLoginAssistTransition({
     };
   }
 
-  if (headless) {
-    return {
-      outcome: "BLOCKED",
-      code: "LOGIN_ASSIST_HEADLESS_UNSUPPORTED",
-      reason: "Login assist requires PLAYWRIGHT_HEADLESS=false for manual authentication."
-    };
-  }
+  // Headless mode is supported for dashboard-driven credential/OTP submissions.
+  // Keep the arg for compatibility with existing callers.
+  void headless;
 
   if (captchaDetected) {
     return {
@@ -63,4 +59,3 @@ export function decideLoginAssistTransition({
     reason: "Waiting for manual login to complete."
   };
 }
-

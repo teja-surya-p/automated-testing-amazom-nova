@@ -3,6 +3,9 @@ const VALID_VERDICTS = new Set(["PASS", "INFO", "WARN", "FAIL"]);
 const VALID_EVIDENCE_STRENGTH = new Set(["weak", "medium", "strong"]);
 const VALID_USABILITY_SEVERITY = new Set(["none", "low", "medium", "high", "critical"]);
 const VALID_SIGNAL_STRENGTH = new Set(["weak", "medium", "strong"]);
+const TEXT_VISIBILITY_STRICT_CHECKS = new Set(["TEXT_OVERFLOW_CLIP", "CLIPPED_PRIMARY_CTA", "TRUNCATED_LABEL"]);
+const NON_PRODUCT_SELECTOR_PATTERN =
+  /(audit|debug|evidence|annotation|devtools|browser-chrome|highlight-label|overlay-badge)/i;
 
 const ADVISORY_CHECKS = new Set([
   "CTA_PRIORITY_CONFLICT",
@@ -103,6 +106,60 @@ function normalizeSignalArray(input = []) {
       };
     })
     .filter(Boolean);
+}
+
+function quotedVisibleText(actual = "") {
+  const match = String(actual).match(/"([^"]{2,})"/);
+  return String(match?.[1] ?? "").trim();
+}
+
+function hasVisibleTextEvidence(issue = {}) {
+  const candidateValues = [
+    issue.exactVisibleText,
+    issue.visibleText,
+    issue.detectorSignals?.visibleText,
+    issue.detectorSignals?.textSample,
+    issue.detectorSignals?.candidateText,
+    quotedVisibleText(issue.actual)
+  ];
+  return candidateValues.some((value) => String(value ?? "").trim().length >= 2);
+}
+
+function pointsToNonProductUi(issue = {}) {
+  const selector = String(issue.affectedSelector ?? "").trim();
+  if (!selector) {
+    return false;
+  }
+  return NON_PRODUCT_SELECTOR_PATTERN.test(selector);
+}
+
+function applyHandbookAppendixFGates({ issue = {}, adjusted = {}, reasons = [] } = {}) {
+  if (pointsToNonProductUi(issue)) {
+    adjusted.verdict = adjusted.verdict === "PASS" ? "PASS" : "INFO";
+    adjusted.summary =
+      "Candidate points to audit/debug/evidence UI rather than product UI and is excluded from defects.";
+    adjusted.reasoning =
+      "Appendix F requires rejecting findings outside product UI (overlays, annotation chrome, or debug controls).";
+    adjusted.requiresHumanReview = false;
+    reasons.push("appendix-f-non-product-ui");
+    return;
+  }
+
+  const issueType = String(issue.issueType ?? "").toUpperCase();
+  if (TEXT_VISIBILITY_STRICT_CHECKS.has(issueType) && !hasVisibleTextEvidence(issue)) {
+    if (adjusted.verdict === "FAIL") {
+      adjusted.verdict = "WARN";
+      reasons.push("appendix-f-visible-text-proof-missing");
+    } else if (adjusted.verdict === "WARN") {
+      adjusted.verdict = "INFO";
+      reasons.push("appendix-f-visible-text-proof-weak");
+    }
+    adjusted.reasoning = normalizeText(
+      adjusted.reasoning,
+      "Appendix F requires exact visible text evidence for text clipping classification."
+    );
+    adjusted.requiresHumanReview = adjusted.verdict === "WARN";
+  }
 }
 
 function normalizedSignalsFromIssue(issue = {}) {
@@ -343,6 +400,12 @@ function calibrateAdvisoryVerdict({
     reasons.push("weak-evidence-demoted");
   }
 
+  applyHandbookAppendixFGates({
+    issue,
+    adjusted,
+    reasons
+  });
+
   adjusted.severity = usabilitySeverity(adjusted.verdict, issue.severity, policyClass);
   adjusted.requiresHumanReview = adjusted.verdict === "WARN";
 
@@ -368,6 +431,12 @@ function calibrateHardFailVerdict({ issue, initialJudgment, signalCounts, policy
     adjusted.requiresHumanReview = true;
     reasons.push("insufficient-objective-evidence");
   }
+
+  applyHandbookAppendixFGates({
+    issue,
+    adjusted,
+    reasons
+  });
 
   adjusted.severity = usabilitySeverity(adjusted.verdict, issue.severity, policyClass);
 

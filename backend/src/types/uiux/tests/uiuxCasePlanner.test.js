@@ -65,15 +65,26 @@ function buildSnapshotFixture() {
 }
 
 test("estimateUiuxPlannedCases is deterministic and bounded by config", () => {
-  const estimate = estimateUiuxPlannedCases({
+  const runConfig = {
     uiux: {
       maxPages: 5,
-      viewports: [{ label: "mobile" }, { label: "desktop" }],
-      maxInteractionsPerPage: 4
+      maxInteractionsPerPage: 4,
+      breakpoints: {
+        minWidth: 320,
+        maxWidth: 480,
+        coarseStep: 80,
+        representativeWidthsPerRange: 2
+      }
     }
-  });
-  const expected = 5 * 2 * (1 + baselineUiuxChecks.length) + 5 * 4;
-  assert.equal(estimate, expected);
+  };
+  const firstEstimate = estimateUiuxPlannedCases(runConfig);
+  const secondEstimate = estimateUiuxPlannedCases(runConfig);
+  const minExpected = 5 * 2 * (1 + baselineUiuxChecks.length) + 5 * 4;
+  const maxExpected = 5 * 8 * (1 + baselineUiuxChecks.length) + 5 * 4;
+
+  assert.equal(firstEstimate, secondEstimate);
+  assert.equal(firstEstimate >= minExpected, true);
+  assert.equal(firstEstimate <= maxExpected, true);
 });
 
 test("planUiuxCasesForPage emits render/check/interaction cases for all devices", () => {

@@ -1,36 +1,27 @@
 import express from "express";
 import { config } from "../lib/config.js";
+import { createServerRuntimeInfo } from "../lib/runtimeInfo.js";
 import { parseRunConfig, RunConfigValidationError } from "../library/schemas/runConfig.js";
 import { SafetyPolicy } from "../library/policies/safetyPolicy.js";
+import {
+  normalizeSubmittedInputFieldValues,
+  resolveFirstCredentialAlias
+} from "../library/auth-fields/index.js";
 import { buildFullDeviceMatrix, QUICK_DEVICE_PROFILES } from "../types/uiux/deviceMatrix.js";
 
-export function createSessionRouter(orchestrator, sessionStore, documentarianProvider) {
+export function createSessionRouter(orchestrator, sessionStore, documentarianProvider, options = {}) {
   const router = express.Router();
   const safetyPolicy = new SafetyPolicy();
-
-  function resolveFirstCredentialAlias(payload = {}) {
-    const aliases = [
-      payload?.identifier,
-      payload?.accessKey,
-      payload?.access_key,
-      payload?.username,
-      payload?.email,
-      payload?.loginId,
-      payload?.login_id,
-      payload?.accountId,
-      payload?.account_id,
-      payload?.userId,
-      payload?.user_id
-    ];
-
-    for (const alias of aliases) {
-      const normalized = String(alias ?? "").trim();
-      if (normalized) {
-        return normalized;
-      }
-    }
-    return "";
-  }
+  const runtimeInfo = options?.runtimeInfo ?? createServerRuntimeInfo();
+  const ACTIVE_STOP_ALL_STATUSES = new Set([
+    "queued",
+    "running",
+    "waiting-login",
+    "login-assist",
+    "form-assist",
+    "verification-assist",
+    "cancelling"
+  ]);
 
   function sendAuthError(res, status, code, message, extras = {}) {
     res.status(status).json({
@@ -56,11 +47,31 @@ export function createSessionRouter(orchestrator, sessionStore, documentarianPro
     });
   }
 
+  function buildRuntimePayload() {
+    return {
+      ok: true,
+      service: runtimeInfo.service ?? "qa-server",
+      version: runtimeInfo.version ?? "unknown",
+      startedAt: runtimeInfo.startedAt ?? null,
+      gitShortHash: runtimeInfo.gitShortHash ?? "unknown",
+      capabilities:
+        runtimeInfo.capabilities && typeof runtimeInfo.capabilities === "object"
+          ? runtimeInfo.capabilities
+          : {
+              functionalityLoginAssist: true
+            }
+    };
+  }
+
   router.get("/health", (_req, res) => {
     res.json({
-      ok: true,
+      ...buildRuntimePayload(),
       targetAppUrl: config.targetAppUrl
     });
+  });
+
+  router.get("/version", (_req, res) => {
+    res.json(buildRuntimePayload());
   });
 
   router.get("/sessions", (_req, res) => {
@@ -215,29 +226,133 @@ export function createSessionRouter(orchestrator, sessionStore, documentarianPro
     });
   });
 
-  async function handleCredentialSubmission(req, res) {
-    const identifier = resolveFirstCredentialAlias(req.body);
-    const password = String(req.body?.password ?? "");
+  function normalizeStopAllResponse(result = {}) {
+    const activeCount = Number(result?.activeFound ?? result?.activeCount ?? 0);
+    const requestedSessionIds = Array.isArray(result?.requestedSessionIds) ? result.requestedSessionIds : [];
+    const failed = Array.isArray(result?.failed) ? result.failed : [];
+    const stoppedCount = Number(result?.stoppedCount ?? Math.max(requestedSessionIds.length - failed.length, 0));
 
-    if (!identifier || !password) {
+    return {
+      ok: Boolean(result?.ok) && failed.length === 0,
+      activeFound: activeCount,
+      activeCount,
+      stoppedCount,
+      requestedSessionIds,
+      failed
+    };
+  }
+
+  async function fallbackStopAll({ reason }) {
+    const sessions = Array.isArray(sessionStore.listSessions?.()) ? sessionStore.listSessions() : [];
+    const active = sessions.filter((session) => ACTIVE_STOP_ALL_STATUSES.has(session?.status));
+    const requestedSessionIds = [];
+    const failed = [];
+
+    for (const session of active) {
+      if (!session?.id) {
+        continue;
+      }
+      requestedSessionIds.push(session.id);
+      try {
+        const stopResult = await orchestrator.stopSession(session.id, { reason });
+        if (!stopResult?.ok) {
+          failed.push({
+            sessionId: session.id,
+            code: stopResult?.code ?? "STOP_REQUEST_FAILED",
+            message: stopResult?.message ?? "Failed to request stop for session."
+          });
+        }
+      } catch (error) {
+        failed.push({
+          sessionId: session.id,
+          code: error?.code ?? "STOP_REQUEST_FAILED",
+          message: error?.message ?? "Failed to request stop for session."
+        });
+      }
+    }
+
+    return {
+      ok: failed.length === 0,
+      activeFound: active.length,
+      stoppedCount: Math.max(requestedSessionIds.length - failed.length, 0),
+      requestedSessionIds,
+      failed
+    };
+  }
+
+  async function handleStopAll(_req, res) {
+    const reason = "Run stop requested by user.";
+    let result = null;
+
+    if (typeof orchestrator.stopAllActiveSessions === "function") {
+      try {
+        result = await orchestrator.stopAllActiveSessions({ reason });
+      } catch {
+        result = null;
+      }
+    }
+
+    if (!result) {
+      result = await fallbackStopAll({ reason });
+    }
+
+    res.json(normalizeStopAllResponse(result));
+  }
+
+  router.post("/sessions/stop-all", handleStopAll);
+  router.post("/sessions/stop-all-active", handleStopAll);
+  router.post("/sessions/terminate-all", handleStopAll);
+  router.post("/stop-all", handleStopAll);
+
+  function normalizeAuthInputFieldsFromRequestBody(body = {}) {
+    const directFields = normalizeSubmittedInputFieldValues(body?.inputFields ?? body?.fields ?? {});
+    const identifierAlias = resolveFirstCredentialAlias(body);
+    const password = String(body?.password ?? "");
+    const otp = String(body?.otp ?? body?.code ?? "").trim();
+
+    if (identifierAlias && !directFields.identifier) {
+      directFields.identifier = identifierAlias;
+    }
+    if (password && !directFields.password) {
+      directFields.password = password;
+    }
+    if (otp && !directFields.otp) {
+      directFields.otp = otp;
+    }
+
+    return directFields;
+  }
+
+  async function handleInputFieldsSubmission(req, res) {
+    const inputFields = normalizeAuthInputFieldsFromRequestBody(req.body ?? {});
+
+    if (Object.keys(inputFields).length === 0) {
       sendAuthError(
         res,
         400,
         "VALIDATION_ERROR",
-        "Both first credential (identifier/username/email) and password are required.",
+        "At least one input field value is required.",
         {
-        sessionId: req.params.sessionId
+          sessionId: req.params.sessionId
         }
       );
       return;
     }
 
-    const result = await orchestrator.submitSessionCredentials(req.params.sessionId, {
-      identifier,
-      username: identifier,
-      email: identifier,
-      password
-    });
+    const result =
+      typeof orchestrator.submitSessionInputFields === "function"
+        ? await orchestrator.submitSessionInputFields(req.params.sessionId, {
+            inputFields
+          })
+        : await orchestrator.submitSessionCredentials(req.params.sessionId, {
+            ...inputFields,
+            inputFields,
+            allowPartialInputFields: true,
+            identifier: resolveFirstCredentialAlias(inputFields),
+            username: resolveFirstCredentialAlias(inputFields),
+            email: resolveFirstCredentialAlias(inputFields),
+            password: String(inputFields?.password ?? "")
+          });
 
     if (!result?.ok && result?.code === "SESSION_NOT_FOUND") {
       sendAuthError(res, 404, result.code, result.message, {
@@ -264,7 +379,7 @@ export function createSessionRouter(orchestrator, sessionStore, documentarianPro
     }
 
     if (!result?.ok) {
-      sendAuthError(res, 400, result?.code ?? "AUTH_ASSIST_ERROR", result?.message ?? "Credential submission failed.", {
+      sendAuthError(res, 400, result?.code ?? "AUTH_ASSIST_ERROR", result?.message ?? "Input-field submission failed.", {
         sessionId: req.params.sessionId,
         authAssist: result?.authAssist ?? null
       });
@@ -274,7 +389,7 @@ export function createSessionRouter(orchestrator, sessionStore, documentarianPro
     sendAuthSuccess(
       res,
       req.params.sessionId,
-      result?.code ?? "AUTH_ASSIST_UPDATE",
+      result?.code ?? "INPUT_FIELDS_SUBMITTED",
       result?.message ?? "Auth assist updated.",
       result?.authAssist ?? null
     );
@@ -387,13 +502,205 @@ export function createSessionRouter(orchestrator, sessionStore, documentarianPro
     );
   }
 
-  router.post("/sessions/:sessionId/auth/credentials", handleCredentialSubmission);
-  router.post("/sessions/:sessionId/login-assist/credentials", handleCredentialSubmission);
+  router.post("/sessions/:sessionId/auth/input-fields", handleInputFieldsSubmission);
+  router.post("/sessions/:sessionId/login-assist/input-fields", handleInputFieldsSubmission);
+  router.post("/sessions/:sessionId/auth/credentials", handleInputFieldsSubmission);
+  router.post("/sessions/:sessionId/login-assist/credentials", handleInputFieldsSubmission);
   router.post("/sessions/:sessionId/auth/otp", handleOtpSubmission);
   router.post("/sessions/:sessionId/login-assist/otp", handleOtpSubmission);
   router.post("/sessions/:sessionId/auth/skip", handleAuthSkip);
   router.post("/sessions/:sessionId/login-assist/skip", handleAuthSkip);
   router.post("/sessions/:sessionId/skip", handleAuthSkip);
+
+  async function handleFormGroupSubmit(req, res) {
+    const result = await orchestrator.submitSessionFormDecision(req.params.sessionId, req.params.groupId, {
+      action: "submit",
+      values: req.body?.values ?? {},
+      description: req.body?.description ?? "",
+      reason: req.body?.reason ?? ""
+    });
+    if (!result?.ok) {
+      res.status(result?.code === "SESSION_NOT_FOUND" ? 404 : 409).json({
+        ok: false,
+        sessionId: req.params.sessionId,
+        code: result?.code ?? "FORM_ASSIST_ERROR",
+        message: result?.message ?? "Unable to submit form decision.",
+        formAssist: result?.formAssist ?? null
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      sessionId: req.params.sessionId,
+      code: result.code,
+      message: result.message,
+      formAssist: result.formAssist ?? null
+    });
+  }
+
+  async function handleFormGroupSkip(req, res) {
+    const result = await orchestrator.submitSessionFormDecision(req.params.sessionId, req.params.groupId, {
+      action: "skip",
+      reason: req.body?.reason ?? "Form skipped by user."
+    });
+    if (!result?.ok) {
+      res.status(result?.code === "SESSION_NOT_FOUND" ? 404 : 409).json({
+        ok: false,
+        sessionId: req.params.sessionId,
+        code: result?.code ?? "FORM_ASSIST_ERROR",
+        message: result?.message ?? "Unable to skip form.",
+        formAssist: result?.formAssist ?? null
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      sessionId: req.params.sessionId,
+      code: result.code,
+      message: result.message,
+      formAssist: result.formAssist ?? null
+    });
+  }
+
+  async function handleFormGroupAuto(req, res) {
+    const result = await orchestrator.submitSessionFormDecision(req.params.sessionId, req.params.groupId, {
+      action: "auto",
+      description: req.body?.description ?? "",
+      reason: req.body?.reason ?? ""
+    });
+    if (!result?.ok) {
+      res.status(result?.code === "SESSION_NOT_FOUND" ? 404 : 409).json({
+        ok: false,
+        sessionId: req.params.sessionId,
+        code: result?.code ?? "FORM_ASSIST_ERROR",
+        message: result?.message ?? "Unable to auto submit form.",
+        formAssist: result?.formAssist ?? null
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      sessionId: req.params.sessionId,
+      code: result.code,
+      message: result.message,
+      formAssist: result.formAssist ?? null
+    });
+  }
+
+  async function handleFormGroupDescription(req, res) {
+    const result = await orchestrator.updateSessionFormGroupDescription(req.params.sessionId, req.params.groupId, {
+      description: req.body?.description ?? ""
+    });
+    if (!result?.ok) {
+      res.status(result?.code === "SESSION_NOT_FOUND" ? 404 : 409).json({
+        ok: false,
+        sessionId: req.params.sessionId,
+        code: result?.code ?? "FORM_ASSIST_ERROR",
+        message: result?.message ?? "Unable to update form group description.",
+        formAssist: result?.formAssist ?? null
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      sessionId: req.params.sessionId,
+      code: result.code,
+      message: result.message,
+      formAssist: result.formAssist ?? null
+    });
+  }
+
+  async function handleFormDecisionAll(req, res) {
+    const result = await orchestrator.submitSessionFormGlobalDecision(req.params.sessionId, {
+      action: req.body?.action
+    });
+    if (!result?.ok) {
+      res.status(result?.code === "SESSION_NOT_FOUND" ? 404 : 409).json({
+        ok: false,
+        sessionId: req.params.sessionId,
+        code: result?.code ?? "FORM_ASSIST_ERROR",
+        message: result?.message ?? "Unable to submit global form decision.",
+        formAssist: result?.formAssist ?? null
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      sessionId: req.params.sessionId,
+      code: result.code,
+      message: result.message,
+      formAssist: result.formAssist ?? null
+    });
+  }
+
+  async function handleVerificationDecision(req, res) {
+    const result = await orchestrator.submitSessionVerificationDecision(req.params.sessionId, req.params.promptId, {
+      decision: req.body?.decision,
+      note: req.body?.note ?? ""
+    });
+    if (!result?.ok) {
+      res.status(result?.code === "SESSION_NOT_FOUND" ? 404 : 409).json({
+        ok: false,
+        sessionId: req.params.sessionId,
+        code: result?.code ?? "VERIFICATION_ASSIST_ERROR",
+        message: result?.message ?? "Unable to submit verification decision.",
+        verificationAssist: result?.verificationAssist ?? null
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      sessionId: req.params.sessionId,
+      code: result.code,
+      message: result.message,
+      verificationAssist: result.verificationAssist ?? null
+    });
+  }
+
+  async function handleVerificationDecisionAll(req, res) {
+    const result = await orchestrator.submitSessionVerificationDecisionAll(req.params.sessionId, {
+      decision: req.body?.decision,
+      note: req.body?.note ?? ""
+    });
+    if (!result?.ok) {
+      res.status(result?.code === "SESSION_NOT_FOUND" ? 404 : 409).json({
+        ok: false,
+        sessionId: req.params.sessionId,
+        code: result?.code ?? "VERIFICATION_ASSIST_ERROR",
+        message: result?.message ?? "Unable to submit verification decision for all prompts.",
+        verificationAssist: result?.verificationAssist ?? null
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      sessionId: req.params.sessionId,
+      code: result.code,
+      message: result.message,
+      verificationAssist: result.verificationAssist ?? null
+    });
+  }
+
+  router.post("/sessions/:sessionId/forms/:groupId/submit", handleFormGroupSubmit);
+  router.post("/sessions/:sessionId/forms/:groupId/skip", handleFormGroupSkip);
+  router.post("/sessions/:sessionId/forms/:groupId/auto", handleFormGroupAuto);
+  router.post("/sessions/:sessionId/forms/:groupId/description", handleFormGroupDescription);
+  router.post("/sessions/:sessionId/forms/skip-all", (req, res) => {
+    req.body = {
+      ...(req.body ?? {}),
+      action: "skip-all"
+    };
+    return handleFormDecisionAll(req, res);
+  });
+  router.post("/sessions/:sessionId/forms/auto-all", (req, res) => {
+    req.body = {
+      ...(req.body ?? {}),
+      action: "auto-all"
+    };
+    return handleFormDecisionAll(req, res);
+  });
+  router.post("/sessions/:sessionId/verifications/:promptId/decision", handleVerificationDecision);
+  router.post("/sessions/:sessionId/verifications/decision-all", handleVerificationDecisionAll);
 
   router.get("/sessions/:sessionId/report", (req, res) => {
     const session = sessionStore.getSession(req.params.sessionId);

@@ -1,6 +1,8 @@
 import {
   buildUiuxClusterKey,
   buildUiuxGroupedCaseKey,
+  buildUiuxComponentFingerprint,
+  resolveUiuxIssueFamily,
   normalizePathFromUrl
 } from "../library/reporting/clustering.js";
 import {
@@ -46,6 +48,7 @@ import {
   calibrateUiuxIssue
 } from "../types/uiux/severityPolicy.js";
 import { calibrateUiuxJudgment } from "../types/uiux/judgment/calibration.js";
+import { buildUiuxHandbookCoverage } from "../types/uiux/handbook/coverage.js";
 
 function outcomeLabel(status) {
   if (status === "passed") {
@@ -366,14 +369,22 @@ function buildUiuxGroupedIssues(issues = []) {
   const groups = new Map();
   for (const issue of issues) {
     const groupId = buildUiuxGroupedCaseKey(issue);
+    const issueFamily = resolveUiuxIssueFamily(issue.issueType ?? "UNKNOWN");
     const current = groups.get(groupId) ?? {
       groupId,
       issues: [],
       deviceMap: new Map(),
+      sourceIssueTypes: new Set(),
+      sourceTestcaseIds: new Set(),
       worstSeverity: null,
-      worstFinalSeverity: null
+      worstFinalSeverity: null,
+      canonicalIssueFamily: issueFamily
     };
     current.issues.push(issue);
+    current.sourceIssueTypes.add(issue.issueType ?? "UNKNOWN");
+    if (issue.testcaseId) {
+      current.sourceTestcaseIds.add(issue.testcaseId);
+    }
     current.worstSeverity = worstSeverity(current.worstSeverity, issue.severity ?? "P2");
     current.worstFinalSeverity = worstSeverity(
       current.worstFinalSeverity,
@@ -403,10 +414,19 @@ function buildUiuxGroupedIssues(issues = []) {
         return String(left.viewportLabel ?? "").localeCompare(String(right.viewportLabel ?? ""));
       });
       const explanation = normalizeUiuxExplanation(primaryIssue);
+      const componentFingerprint = buildUiuxComponentFingerprint(primaryIssue);
+      const sourceIssueTypes = [...entry.sourceIssueTypes.values()].sort((left, right) =>
+        String(left).localeCompare(String(right))
+      );
 
       return {
         groupId: entry.groupId,
         issueType: primaryIssue.issueType ?? "UNKNOWN",
+        canonicalIssueFamily: entry.canonicalIssueFamily ?? resolveUiuxIssueFamily(primaryIssue.issueType ?? "UNKNOWN"),
+        sourceIssueTypes,
+        sourceTestcaseIds: [...entry.sourceTestcaseIds.values()].sort((left, right) =>
+          String(left).localeCompare(String(right))
+        ),
         title: primaryIssue.title ?? primaryIssue.issueType ?? "UI/UX issue",
         summary: buildUiuxIssueSummary({
           ...primaryIssue,
@@ -437,17 +457,37 @@ function buildUiuxGroupedIssues(issues = []) {
         downgradeReason: primaryIssue.downgradeReason ?? null,
         supportingSignalCounts: primaryIssue.supportingSignalCounts ?? null,
         highlight: primaryIssue.highlight ?? null,
+        component: {
+          fingerprint: componentFingerprint.key,
+          selector: primaryIssue.affectedSelector ?? null,
+          label:
+            primaryIssue.exactVisibleText ??
+            primaryIssue.highlight?.label ??
+            primaryIssue.title ??
+            primaryIssue.issueType ??
+            null,
+          region: primaryIssue.highlight?.box ?? null
+        },
         primaryEvidence: {
           screenshotRef: primaryEvidence?.ref ?? null,
           captureMode: primaryEvidence?.captureMode ?? "viewport",
           highlight: primaryIssue.highlight ?? null,
           viewport: primaryEvidence?.viewport ?? primaryIssue.highlight?.viewport ?? null
         },
+        breakpointRange: primaryIssue.breakpointRange ?? null,
+        breakpointRanges: Array.isArray(primaryIssue.breakpointRanges) ? primaryIssue.breakpointRanges : [],
+        representativeWidths: Array.isArray(primaryIssue.representativeWidths)
+          ? primaryIssue.representativeWidths
+          : [],
+        representativeDevices: Array.isArray(primaryIssue.representativeDevices)
+          ? primaryIssue.representativeDevices
+          : [],
         evidenceRefs: primaryEvidence ? [primaryEvidence] : [],
         devices,
         deviceLabel: devices[0]?.deviceLabel ?? primaryIssue.deviceLabel ?? "default",
         viewportLabel: devices[0]?.viewportLabel ?? primaryIssue.viewportLabel ?? "default",
-        occurrenceCount: devices.length,
+        occurrenceCount: sortedIssues.length,
+        affectedDeviceCount: devices.length,
         secondaryOccurrences: sortedIssues
           .slice(0, 40)
           .map((issueOccurrence) => ({
@@ -456,6 +496,7 @@ function buildUiuxGroupedIssues(issues = []) {
             deviceLabel: issueOccurrence.deviceLabel ?? issueOccurrence.viewportLabel ?? "default",
             viewportLabel: issueOccurrence.viewportLabel ?? issueOccurrence.deviceLabel ?? "default",
             step: issueOccurrence.step ?? null,
+            issueType: issueOccurrence.issueType ?? "UNKNOWN",
             evidenceRefs: issueOccurrence.evidenceRefs ?? []
           }))
       };
@@ -550,6 +591,18 @@ function buildFunctionalDeterministicSummary(functional = {}) {
   return `Functional: ran ${flowsRun} flows, ${assertionsEvaluated} assertions, passed ${assertionsPassed}, failed ${assertionsFailed}, blockers ${blockers}`;
 }
 
+function buildPerformanceDeterministicSummary(performance = {}) {
+  const sampleCount = Number(performance.sampleCount ?? 0);
+  const issueCount = Array.isArray(performance.failures ?? performance.issues)
+    ? (performance.failures ?? performance.issues).length
+    : 0;
+  const advisoryCount = Array.isArray(performance.advisories) ? performance.advisories.length : 0;
+  const ttfb = performance.metrics?.worst?.ttfbMs ?? null;
+  const lcp = performance.metrics?.worst?.lcpMs ?? null;
+  const cls = performance.metrics?.worst?.cls ?? null;
+  return `Performance: ${sampleCount} sample${sampleCount === 1 ? "" : "s"}, ${issueCount} failure${issueCount === 1 ? "" : "s"}, ${advisoryCount} advisory item${advisoryCount === 1 ? "" : "s"}, worst TTFB ${ttfb ?? "n/a"} ms, LCP ${lcp ?? "n/a"} ms, CLS ${cls ?? "n/a"}.`;
+}
+
 function attachAccessibilityDiffTopRepros(baselineDiff = null, clusters = []) {
   if (!baselineDiff) {
     return null;
@@ -576,7 +629,8 @@ function buildUiuxSummary({
   groupedIssues = [],
   clusters = [],
   reproBundles = [],
-  baselineDiff = null
+  baselineDiff = null,
+  handbookCoverage = null
 }) {
   const uiux = session.uiux ?? {};
   const matrix = (uiux.pageDeviceMatrix ?? []).slice(-900);
@@ -666,8 +720,19 @@ function buildUiuxSummary({
       maxPages: session.runConfig?.uiux?.maxPages ?? null,
       maxInteractionsPerPage: session.runConfig?.uiux?.maxInteractionsPerPage ?? null,
       checkCount: null,
-      deviceCount: session.runConfig?.uiux?.devices?.maxDevices ?? null
+      strategy: "component-breakpoint",
+      sampledWidthEstimate: session.runConfig?.uiux?.breakpoints
+        ? Math.max(
+            1,
+            Math.floor(
+              (Number(session.runConfig.uiux.breakpoints.maxWidth ?? 1440) -
+                Number(session.runConfig.uiux.breakpoints.minWidth ?? 320)) /
+                Math.max(Number(session.runConfig.uiux.breakpoints.coarseStep ?? 40), 1)
+            ) + 1
+          )
+        : null
     },
+    breakpointSummary: uiux.breakpointSummary ?? null,
     deviceSummary,
     pageDeviceMatrix: matrix,
     failingDevices,
@@ -686,6 +751,20 @@ function buildUiuxSummary({
     },
     groupedFailures: {
       count: groupedIssues.length
+    },
+    handbookCoverage: handbookCoverage ?? {
+      summary: {
+        total: 0,
+        pass: 0,
+        fail: 0,
+        warn: 0,
+        info: 0,
+        notRun: 0,
+        automated: 0,
+        advisory: 0,
+        manual: 0
+      },
+      checks: []
     },
     judgmentCounts,
     baseline: {
@@ -860,7 +939,7 @@ function extractAccessibilityFocusProbeFindings(issues = []) {
     });
 }
 
-function buildMarkdown(session, uiuxSummary, functional, accessibility) {
+function buildMarkdown(session, uiuxSummary, functional, accessibility, performance) {
   const blocker = session.primaryBlocker;
   const timeline = (session.timeline ?? [])
     .map((entry) => `- ${entry.at}: [${entry.type}] ${entry.message}`)
@@ -901,17 +980,19 @@ function buildMarkdown(session, uiuxSummary, functional, accessibility) {
     `- Effective time budget: ${uiuxSummary.effectiveBudget?.timeBudgetMs ?? "n/a"} ms`,
     `- Effective max pages: ${uiuxSummary.effectiveBudget?.maxPages ?? "n/a"}`,
     `- Effective max interactions/page: ${uiuxSummary.effectiveBudget?.maxInteractionsPerPage ?? "n/a"}`,
-    `- Effective devices: ${uiuxSummary.effectiveBudget?.deviceCount ?? "n/a"}`,
+    `- Responsive strategy: ${uiuxSummary.effectiveBudget?.strategy ?? "component-breakpoint"}`,
+    `- Estimated sampled widths: ${uiuxSummary.effectiveBudget?.sampledWidthEstimate ?? "n/a"}`,
     `- Interactions attempted: ${uiuxSummary.coverage.interactionsAttempted}`,
     `- Interactions skipped by safety: ${uiuxSummary.coverage.interactionsSkippedBySafety}`,
-    `- Devices scanned: ${(uiuxSummary.deviceSummary ?? []).length}`,
-    `- Devices with failures: ${failingDevices.length}${failingDevices.length ? ` (${failingDevices.join(", ")})` : ""}`,
+    `- Breakpoint samples scanned: ${(uiuxSummary.deviceSummary ?? []).length}`,
+    `- Failing breakpoint samples: ${failingDevices.length}${failingDevices.length ? ` (${failingDevices.join(", ")})` : ""}`,
     `- Artifacts retained: ${uiuxSummary.artifacts.artifactsRetainedCount}`,
     `- Artifacts pruned: ${uiuxSummary.artifacts.artifactsPrunedCount}`,
     `- Issue-only artifacts policy: ${uiuxSummary.artifacts.issueOnlyArtifacts ? "enabled" : "disabled"}`,
     `- Issue clusters: ${uiuxSummary.clusters.count}`,
     `- Grouped failures: ${uiuxSummary.groupedFailures?.count ?? 0}`,
     `- Repro bundles: ${uiuxSummary.reproBundles.count}`,
+    `- Handbook checks: ${uiuxSummary.handbookCoverage?.summary?.total ?? 0} total, ${uiuxSummary.handbookCoverage?.summary?.fail ?? 0} fail, ${uiuxSummary.handbookCoverage?.summary?.warn ?? 0} warn, ${uiuxSummary.handbookCoverage?.summary?.info ?? 0} info`,
     ``,
     `## Accessibility Summary`,
     `- Pages scanned: ${accessibility?.summary?.pagesScanned ?? 0}`,
@@ -931,6 +1012,21 @@ function buildMarkdown(session, uiuxSummary, functional, accessibility) {
     `- API calls observed: ${functional?.contractSummary?.apiCallsObserved ?? 0}`,
     `- API 5xx count: ${functional?.contractSummary?.apiErrorCounts?.["5xx"] ?? 0}`,
     `- Functional summary: ${functional?.summary ?? "n/a"}`,
+    ``,
+    `## Performance Summary`,
+    `- Overall status: ${performance?.summary?.overallStatus ?? performance?.overallStatus ?? "warn"}`,
+    `- Score: ${performance?.summary?.score ?? "n/a"}`,
+    `- Samples captured: ${performance?.sampleCount ?? 0}`,
+    `- Performance failures: ${(performance?.failures ?? performance?.issues ?? []).length}`,
+    `- Advisories: ${(performance?.advisories ?? []).length}`,
+    `- Tested pages: ${performance?.summary?.testedPages ?? (performance?.pages ?? []).length ?? 0}`,
+    `- Tested endpoints: ${performance?.summary?.testedEndpoints ?? (performance?.endpoints ?? []).length ?? 0}`,
+    `- Worst TTFB: ${performance?.metrics?.worst?.ttfbMs ?? "n/a"} ms`,
+    `- Worst FCP: ${performance?.metrics?.worst?.fcpMs ?? "n/a"} ms`,
+    `- Worst LCP: ${performance?.metrics?.worst?.lcpMs ?? "n/a"} ms`,
+    `- Worst CLS: ${performance?.metrics?.worst?.cls ?? "n/a"}`,
+    `- Failed requests: ${performance?.network?.failedRequests ?? 0}`,
+    `- Performance summary: ${performance?.summaryText ?? "n/a"}`,
     ``
   ].join("\n");
 }
@@ -939,13 +1035,18 @@ function finalizeUiuxReport(session) {
   const rawIssues = session.uiux?.issues ?? [];
   const rawClusters = session.uiux?.clusters ?? [];
   if (!isUiuxMode(session)) {
+    const handbookCoverage = buildUiuxHandbookCoverage({
+      issues: rawIssues,
+      enabled: false
+    });
     const summary = buildUiuxSummary({
       session,
       issues: rawIssues,
       groupedIssues: [],
       clusters: rawClusters,
       reproBundles: [],
-      baselineDiff: null
+      baselineDiff: null,
+      handbookCoverage
     });
     return {
       uiuxSummary: summary,
@@ -953,7 +1054,8 @@ function finalizeUiuxReport(session) {
       groupedIssues: [],
       uiuxClusters: rawClusters,
       reproBundles: [],
-      baselineDiff: null
+      baselineDiff: null,
+      handbookCoverage
     };
   }
 
@@ -1006,6 +1108,10 @@ function finalizeUiuxReport(session) {
     (issue) => (issue.calibratedJudgment?.verdict ?? issue.calibratedVerdict ?? "FAIL") === "FAIL"
   );
   const groupedIssues = buildUiuxGroupedIssues(defectIssues);
+  const handbookCoverage = buildUiuxHandbookCoverage({
+    issues: calibratedIssues,
+    enabled: true
+  });
 
   const baselineMode = resolveUiuxBaselineMode(session.runConfig);
   const baselineId = resolveUiuxBaselineId(session.runConfig);
@@ -1043,7 +1149,8 @@ function finalizeUiuxReport(session) {
     groupedIssues,
     clusters: clustersWithTopRepro,
     reproBundles,
-    baselineDiff
+    baselineDiff,
+    handbookCoverage
   });
 
   return {
@@ -1052,7 +1159,8 @@ function finalizeUiuxReport(session) {
     groupedIssues,
     uiuxClusters: clustersWithTopRepro,
     reproBundles,
-    baselineDiff
+    baselineDiff,
+    handbookCoverage
   };
 }
 
@@ -1193,6 +1301,117 @@ function defaultFunctionalContractSummary() {
   };
 }
 
+function normalizeIssueEvidenceRefs(evidenceRefs = []) {
+  return (Array.isArray(evidenceRefs) ? evidenceRefs : [])
+    .map((entry) => ({
+      ...entry,
+      type: String(entry?.type ?? "").toLowerCase(),
+      ref: entry?.ref ?? entry?.url ?? entry?.path ?? null
+    }))
+    .filter((entry) => entry.ref);
+}
+
+function toArtifactVideoEvidence(entry = {}) {
+  const ref = entry?.url ?? entry?.relativePath ?? entry?.path ?? null;
+  if (!ref) {
+    return null;
+  }
+  return {
+    type: "video",
+    ref,
+    primary: true
+  };
+}
+
+function resolveFunctionalPrimaryVideoEvidence(session = {}, issue = {}) {
+  const normalizedRefs = normalizeIssueEvidenceRefs(issue.evidenceRefs);
+  const explicitPrimary = normalizedRefs.find((entry) => entry.type === "video" && entry.primary);
+  if (explicitPrimary) {
+    return {
+      type: "video",
+      ref: explicitPrimary.ref,
+      primary: true
+    };
+  }
+
+  const firstIssueVideo = normalizedRefs.find((entry) => entry.type === "video");
+  if (firstIssueVideo) {
+    return {
+      type: "video",
+      ref: firstIssueVideo.ref,
+      primary: true
+    };
+  }
+
+  const sessionVideoArtifacts = Array.isArray(session?.artifactIndex?.video) ? session.artifactIndex.video : [];
+  for (let index = sessionVideoArtifacts.length - 1; index >= 0; index -= 1) {
+    const candidate = toArtifactVideoEvidence(sessionVideoArtifacts[index]);
+    if (candidate?.ref) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function buildFunctionalIssueDescription(issue = {}) {
+  const description = issue.description ?? {};
+  const expected = String(description.expected ?? issue.expected ?? "").trim();
+  const actual = String(description.actual ?? issue.actual ?? "").trim();
+  const whatFailed = String(
+    description.whatFailed ??
+      issue.title ??
+      issue.assertionId ??
+      issue.issueType ??
+      "Functional assertion failed."
+  ).trim();
+  const whyItFailed = String(
+    description.whyItFailed ??
+      issue.explanation?.whyItFailed ??
+      issue.actual ??
+      "Observed behavior did not match expected functional behavior."
+  ).trim();
+
+  return {
+    whatFailed,
+    expected,
+    actual,
+    whyItFailed
+  };
+}
+
+function normalizeFunctionalIssue(session = {}, issue = {}) {
+  const isFunctionalMode = session?.runConfig?.testMode === "functional";
+  const normalizedRefs = normalizeIssueEvidenceRefs(issue.evidenceRefs);
+  const primaryVideoEvidence = isFunctionalMode ? resolveFunctionalPrimaryVideoEvidence(session, issue) : null;
+  const dedupedRefs = primaryVideoEvidence?.ref
+    ? normalizedRefs.filter(
+        (entry) => !(entry.type === "video" && String(entry.ref) === String(primaryVideoEvidence.ref))
+      )
+    : normalizedRefs;
+  const evidenceRefs = primaryVideoEvidence
+    ? [primaryVideoEvidence, ...dedupedRefs]
+    : dedupedRefs;
+  const description = isFunctionalMode
+    ? buildFunctionalIssueDescription(issue)
+    : issue.description ?? null;
+
+  return {
+    ...issue,
+    mode: isFunctionalMode ? "functionality" : issue.mode ?? null,
+    summary: issue.summary ?? description?.actual ?? issue.title ?? issue.assertionId ?? issue.issueType ?? "Functional issue detected.",
+    evidenceRefs,
+    primaryEvidence: primaryVideoEvidence
+      ? {
+          type: "video",
+          ref: primaryVideoEvidence.ref,
+          primary: true
+        }
+      : issue.primaryEvidence ?? null,
+    description
+  };
+}
+
 function finalizeFunctionalReport(session) {
   const baseFunctional = session.functional ?? {
     enabled: false,
@@ -1227,6 +1446,7 @@ function finalizeFunctionalReport(session) {
     ...defaultFunctionalContractSummary(),
     ...(baseFunctional.contractSummary ?? {})
   };
+  const normalizedIssues = (baseFunctional.issues ?? []).map((issue) => normalizeFunctionalIssue(session, issue));
 
   const baselineMode = resolveFunctionalBaselineMode(session.runConfig);
   const baselineId = resolveFunctionalBaselineId(session.runConfig);
@@ -1237,6 +1457,7 @@ function finalizeFunctionalReport(session) {
       baselineId,
       functional: {
         ...baseFunctional,
+        issues: normalizedIssues,
         contractSummary
       }
     });
@@ -1256,6 +1477,7 @@ function finalizeFunctionalReport(session) {
       baselineId,
       functional: {
         ...baseFunctional,
+        issues: normalizedIssues,
         contractSummary
       }
     });
@@ -1272,6 +1494,7 @@ function finalizeFunctionalReport(session) {
   return {
     ...baseFunctional,
     summary: baseFunctional.summary || buildFunctionalDeterministicSummary(baseFunctional),
+    issues: normalizedIssues,
     assertionCounts: {
       evaluated: baseFunctional.assertionCounts?.evaluated ?? 0,
       passed: baseFunctional.assertionCounts?.passed ?? 0,
@@ -1289,10 +1512,131 @@ function finalizeFunctionalReport(session) {
   };
 }
 
-function buildDeterministicSummaryText({ session, uiuxSummary, functional, accessibility }) {
+function finalizePerformanceReport(session) {
+  const base = session.performance ?? {
+    enabled: false,
+    mode: "performance",
+    sampleCount: 0,
+    settings: {
+      sampleCount: 0,
+      warmupDelayMs: 0
+    },
+    summary: {
+      overallStatus: "warn",
+      score: 0,
+      testedPages: 0,
+      testedEndpoints: 0,
+      criticalFailures: 0,
+      advisories: 0
+    },
+    summaryText: "Performance mode was not executed.",
+    overallStatus: "warn",
+    keyMetrics: {},
+    thresholds: {},
+    samples: [],
+    pages: [],
+    endpoints: [],
+    slowPages: [],
+    slowEndpoints: [],
+    metrics: {
+      average: {},
+      worst: {}
+    },
+    network: {
+      totalRequests: 0,
+      failedRequests: 0,
+      status4xx: 0,
+      status5xx: 0,
+      status429: 0
+    },
+    failures: [],
+    advisories: [],
+    issues: [],
+    baselineComparison: null,
+    status: "passed",
+    completedAt: null
+  };
+
+  const normalizedFailures = (base.failures ?? base.issues ?? []).map((issue) => ({
+    ...issue,
+    mode: "performance",
+    summary: issue.summary ?? issue.actual ?? issue.title ?? issue.issueType ?? "Performance issue detected.",
+    evidenceRefs: normalizeIssueEvidenceRefs(issue.evidenceRefs)
+  }));
+  const normalizedAdvisories = (base.advisories ?? []).map((issue) => ({
+    ...issue,
+    mode: "performance",
+    summary: issue.summary ?? issue.actual ?? issue.title ?? issue.issueType ?? "Performance advisory.",
+    evidenceRefs: normalizeIssueEvidenceRefs(issue.evidenceRefs)
+  }));
+  const summary = {
+    overallStatus: String(base.summary?.overallStatus ?? base.overallStatus ?? "warn"),
+    score: Number(base.summary?.score ?? 0),
+    testedPages: Number(base.summary?.testedPages ?? (base.pages ?? []).length ?? 0),
+    testedEndpoints: Number(base.summary?.testedEndpoints ?? (base.endpoints ?? []).length ?? 0),
+    criticalFailures: Number(
+      base.summary?.criticalFailures ??
+        normalizedFailures.filter((issue) => ["P0", "P1"].includes(issue.severity)).length
+    ),
+    advisories: Number(base.summary?.advisories ?? normalizedAdvisories.length)
+  };
+  const summaryText =
+    String(base.summaryText ?? "").trim() ||
+    String(base.summary ?? "").trim() ||
+    (normalizedFailures.length > 0
+      ? `Performance scan found ${normalizedFailures.length} threshold failure${normalizedFailures.length === 1 ? "" : "s"}.`
+      : normalizedAdvisories.length > 0
+        ? `Performance scan completed with ${normalizedAdvisories.length} advisories.`
+        : "Performance scan completed.");
+
+  return {
+    ...base,
+    enabled: Boolean(base.enabled),
+    mode: "performance",
+    sampleCount: Number(base.sampleCount ?? 0),
+    settings: {
+      sampleCount: Number(base.settings?.sampleCount ?? base.sampleCount ?? 0),
+      warmupDelayMs: Number(base.settings?.warmupDelayMs ?? 0)
+    },
+    summary,
+    summaryText,
+    overallStatus: summary.overallStatus,
+    keyMetrics: base.keyMetrics ?? {},
+    thresholds: base.thresholds ?? {},
+    samples: Array.isArray(base.samples) ? base.samples : [],
+    pages: Array.isArray(base.pages) ? base.pages : [],
+    endpoints: Array.isArray(base.endpoints) ? base.endpoints : [],
+    slowPages: Array.isArray(base.slowPages) ? base.slowPages : [],
+    slowEndpoints: Array.isArray(base.slowEndpoints) ? base.slowEndpoints : [],
+    metrics: {
+      average: base.metrics?.average ?? {},
+      worst: base.metrics?.worst ?? {}
+    },
+    network: {
+      totalRequests: Number(base.network?.totalRequests ?? 0),
+      failedRequests: Number(base.network?.failedRequests ?? 0),
+      status4xx: Number(base.network?.status4xx ?? 0),
+      status5xx: Number(base.network?.status5xx ?? 0),
+      status429: Number(base.network?.status429 ?? 0)
+    },
+    failures: normalizedFailures,
+    advisories: normalizedAdvisories,
+    issues: normalizedFailures,
+    status: base.status ?? (normalizedFailures.length > 0 ? "soft-passed" : "passed"),
+    baselineComparison:
+      base.baselineComparison && typeof base.baselineComparison === "object"
+        ? base.baselineComparison
+        : null
+  };
+}
+
+function buildDeterministicSummaryText({ session, uiuxSummary, functional, accessibility, performance }) {
   const mode = session?.runConfig?.testMode ?? "default";
   if (mode === "functional") {
     return buildFunctionalDeterministicSummary(functional);
+  }
+  if (mode === "performance") {
+    return buildPerformanceDeterministicSummary(performance);
   }
   if (mode === "accessibility") {
     return accessibility?.summary?.summaryText ?? "Accessibility scan completed.";
@@ -1300,8 +1644,8 @@ function buildDeterministicSummaryText({ session, uiuxSummary, functional, acces
   if (mode === "uiux") {
     const failingDevices = uiuxSummary?.failingDevices ?? [];
     return [
-      `UI/UX: scanned ${uiuxSummary?.pagesVisited ?? 0} pages across ${(uiuxSummary?.deviceSummary ?? []).length} devices;`,
-      `failed devices ${failingDevices.length}${failingDevices.length ? ` (${failingDevices.join(", ")})` : ""}.`
+      `UI/UX: scanned ${uiuxSummary?.pagesVisited ?? 0} pages across ${(uiuxSummary?.deviceSummary ?? []).length} breakpoint samples;`,
+      `failed samples ${failingDevices.length}${failingDevices.length ? ` (${failingDevices.join(", ")})` : ""}.`
     ].join(" ");
   }
   return session?.runSummary?.nextBestAction
@@ -1332,6 +1676,28 @@ function buildAuthAssistReport(session = {}) {
     identifierLabelCandidates: Array.isArray(authAssist?.form?.identifierLabelCandidates)
       ? authAssist.form.identifierLabelCandidates.slice(0, 5)
       : [],
+    inputFields: Array.isArray(authAssist?.form?.inputFields)
+      ? authAssist.form.inputFields.map((field, index) => ({
+          key: String(field?.key ?? "").trim().toLowerCase() || `input_field_${index + 1}`,
+          label: String(field?.label ?? "").trim() || String(field?.key ?? "").trim() || `Field ${index + 1}`,
+          placeholder:
+            String(field?.placeholder ?? "").trim() ||
+            String(field?.label ?? "").trim() ||
+            String(field?.key ?? "").trim() ||
+            `Field ${index + 1}`,
+          kind: String(field?.kind ?? "text").trim().toLowerCase() || "text",
+          secret: Boolean(field?.secret),
+          required: Boolean(field?.required),
+          position: Number.isFinite(Number(field?.position)) ? Number(field.position) : index + 1
+        }))
+      : [],
+    submitAction:
+      authAssist?.form?.submitAction && typeof authAssist.form.submitAction === "object"
+        ? {
+            label: String(authAssist.form.submitAction.label ?? "").trim() || "Submit",
+            type: String(authAssist.form.submitAction.type ?? "").trim().toLowerCase() || "control"
+          }
+        : null,
     nextRecommendedAction: authAssist?.form?.nextRecommendedAction ?? null,
     submitAttempted: Boolean(authAssist?.submitAttempted),
     resumeTriggered: Boolean(authAssist?.resumeTriggered),
@@ -1363,13 +1729,15 @@ export function buildRunReport(session) {
   const uiuxReport = finalizeUiuxReport(session);
   const accessibility = finalizeAccessibilityReport(session);
   const functional = finalizeFunctionalReport(session);
+  const performance = finalizePerformanceReport(session);
   const authAssist = buildAuthAssistReport(session);
-  const markdown = buildMarkdown(session, uiuxReport.uiuxSummary, functional, accessibility);
+  const markdown = buildMarkdown(session, uiuxReport.uiuxSummary, functional, accessibility, performance);
   const deterministicSummary = buildDeterministicSummaryText({
     session,
     uiuxSummary: uiuxReport.uiuxSummary,
     functional,
-    accessibility
+    accessibility,
+    performance
   });
 
   return {
@@ -1384,12 +1752,15 @@ export function buildRunReport(session) {
     evidenceQualityScore: session.outcome?.evidenceQualityScore ?? 0,
     runConfig: session.runConfig ?? null,
     functional,
+    performance,
+    websiteDocumentation: functional?.websiteDocumentation ?? null,
     accessibility,
     accessibilitySummary: accessibility.summary,
     uiuxSummary: uiuxReport.uiuxSummary,
     uiuxIssues: uiuxReport.uiuxIssues,
     uiuxGroupedIssues: uiuxReport.groupedIssues,
     uiuxClusters: uiuxReport.uiuxClusters,
+    uiuxHandbookCoverage: uiuxReport.handbookCoverage ?? null,
     summaryText: {
       deterministic: deterministicSummary,
       llm: null,
@@ -1403,6 +1774,7 @@ export function buildRunReport(session) {
       clusters: uiuxReport.uiuxClusters,
       reproBundles: uiuxReport.reproBundles,
       baselineDiff: uiuxReport.baselineDiff,
+      handbookCoverage: uiuxReport.handbookCoverage ?? null,
       deviceSummary: uiuxReport.uiuxSummary.deviceSummary ?? [],
       pageDeviceMatrix: uiuxReport.uiuxSummary.pageDeviceMatrix ?? [],
       failingDevices: uiuxReport.uiuxSummary.failingDevices ?? []

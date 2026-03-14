@@ -2,9 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  aboveFoldOverloadCheck,
   brokenIconCheck,
   brokenImageCheck,
   brokenPrimaryNavCheck,
+  consentBannerBlockingTaskCheck,
+  contentScannabilityPoorCheck,
   ctaPriorityConflictCheck,
   deadEndPageCheck,
   disabledSubmitNoExplanationCheck,
@@ -15,9 +18,16 @@ import {
   fieldErrorNotVisibleCheck,
   focusVisibilitySmokeCheck,
   formLabelMissingCheck,
+  genericActionLabelsCheck,
+  headingOrderSuspiciousUiuxCheck,
+  horizontalScrollCheck,
+  imageMissingAltUiuxCheck,
+  inputFormatHelpMissingCheck,
   interactiveNoOpCheck,
+  interactiveNameMissingUiuxCheck,
   inconsistentPrimaryNavCheck,
   localizationOverflowHintCheck,
+  mediaScalingBrokenCheck,
   missingPageHeadingCheck,
   navigationTrapPatternCheck,
   nonDismissableModalCheck,
@@ -31,11 +41,14 @@ import {
   stickyOverlayHidesContentCheck,
   successStateMissingConfirmationCheck,
   successStateWithoutNextStepCheck,
+  tableChartMobileUsabilityCheck,
   textOverflowClipCheck,
+  touchTargetTooSmallCheck,
   touchHoverOnlyCriticalActionCheck,
   toastOrErrorWithoutRecoveryCheck,
   unclickableVisibleControlCheck,
-  visualStabilityShiftSmokeCheck
+  visualStabilityShiftSmokeCheck,
+  requiredOptionalUnclearCheck
 } from "../checks/index.js";
 
 function makeSnapshot(overrides = {}) {
@@ -67,6 +80,38 @@ function makeSnapshot(overrides = {}) {
     formControls: [],
     errorBanners: [],
     textOverflowItems: [],
+    headings: [],
+    dataDisplaySignals: {
+      tableCount: 0,
+      chartCount: 0,
+      overflowingTableCount: 0,
+      firstOverflowingTableSelector: null,
+      problematicTableCount: 0,
+      problematicChartCount: 0,
+      poorMobileUsabilityCount: 0,
+      severePoorMobileUsabilityCount: 0,
+      firstProblematicSelector: null,
+      maxHiddenWidthPx: 0,
+      problematicRegions: []
+    },
+    responsiveSignals: {
+      viewportWidth: 1280,
+      viewportHeight: 720,
+      pageWidth: 1280,
+      horizontalOverflowPx: 0,
+      meaningfulOverflowThresholdPx: 4,
+      majorOverflowContainers: [],
+      overflowingContainerCount: 0,
+      severeAlignment: {
+        candidateCount: 0,
+        baselineLeftPx: 0,
+        thresholdPx: 0,
+        maxLeftDeltaPx: 0,
+        candidates: [],
+        overlappingBlockPairCount: 0
+      },
+      mediaOverflowItems: []
+    },
     focusableHiddenElements: [],
     formControlDescriptors: [],
     visibleErrorMessages: [],
@@ -231,6 +276,109 @@ test("TOAST_OR_ERROR_WITHOUT_RECOVERY flags visible errors without action", () =
   assert.equal(issue.issueType, "TOAST_OR_ERROR_WITHOUT_RECOVERY");
   assert.equal(issue.severity, "P2");
   assert.match(issue.actual, /without a retry or dismiss control/);
+});
+
+test("HORIZONTAL_SCROLL flags meaningful page-level overflow", () => {
+  const issue = horizontalScrollCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 390,
+      pageWidth: 504,
+      responsiveSignals: {
+        viewportWidth: 390,
+        viewportHeight: 844,
+        pageWidth: 504,
+        horizontalOverflowPx: 114,
+        meaningfulOverflowThresholdPx: 4,
+        majorOverflowContainers: [],
+        overflowingContainerCount: 0,
+        severeAlignment: {
+          candidateCount: 0,
+          baselineLeftPx: 0,
+          thresholdPx: 0,
+          maxLeftDeltaPx: 0,
+          candidates: [],
+          overlappingBlockPairCount: 0
+        },
+        mediaOverflowItems: []
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "HORIZONTAL_SCROLL");
+  assert.equal(issue.severity, "P1");
+  assert.match(issue.actual, /114px/);
+});
+
+test("HORIZONTAL_SCROLL ignores tiny rounding overflow", () => {
+  const issue = horizontalScrollCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 390,
+      pageWidth: 392,
+      responsiveSignals: {
+        viewportWidth: 390,
+        viewportHeight: 844,
+        pageWidth: 392,
+        horizontalOverflowPx: 2,
+        meaningfulOverflowThresholdPx: 4,
+        majorOverflowContainers: [],
+        overflowingContainerCount: 0,
+        severeAlignment: {
+          candidateCount: 0,
+          baselineLeftPx: 0,
+          thresholdPx: 0,
+          maxLeftDeltaPx: 0,
+          candidates: [],
+          overlappingBlockPairCount: 0
+        },
+        mediaOverflowItems: []
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue, null);
+});
+
+test("HORIZONTAL_SCROLL flags major nested container overflow even when page width is bounded", () => {
+  const issue = horizontalScrollCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 390,
+      pageWidth: 390,
+      responsiveSignals: {
+        viewportWidth: 390,
+        viewportHeight: 844,
+        pageWidth: 390,
+        horizontalOverflowPx: 0,
+        meaningfulOverflowThresholdPx: 4,
+        majorOverflowContainers: [
+          {
+            selector: ".pricing-table-wrap",
+            overflowPx: 126,
+            scrollOverflowPx: 126,
+            rectOverflowPx: 0,
+            parentOverflowPx: 0,
+            widthPressureRatio: 0.88,
+            bounds: { x: 0, y: 320, width: 390, height: 240 }
+          }
+        ],
+        overflowingContainerCount: 1,
+        severeAlignment: {
+          candidateCount: 0,
+          baselineLeftPx: 0,
+          thresholdPx: 0,
+          maxLeftDeltaPx: 0,
+          candidates: [],
+          overlappingBlockPairCount: 0
+        },
+        mediaOverflowItems: []
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "HORIZONTAL_SCROLL");
+  assert.equal(issue.affectedSelector, ".pricing-table-wrap");
 });
 
 test("TEXT_OVERFLOW_CLIP elevates clipped header text", () => {
@@ -832,6 +980,8 @@ test("STICKY_OVERLAY_HIDES_CONTENT flags persistent top-fold covering layers", (
 test("SEVERE_ALIGNMENT_BREAK flags major header row misalignment", () => {
   const issue = severeAlignmentBreakCheck.run({
     snapshot: makeSnapshot({
+      viewportWidth: 390,
+      viewportHeight: 844,
       interactive: [
         {
           selector: "a.header-home",
@@ -867,6 +1017,52 @@ test("SEVERE_ALIGNMENT_BREAK flags major header row misalignment", () => {
 
   assert.equal(issue.issueType, "SEVERE_ALIGNMENT_BREAK");
   assert.equal(issue.severity, "P2");
+});
+
+test("SEVERE_ALIGNMENT_BREAK flags severe mobile content drift from responsive signals", () => {
+  const issue = severeAlignmentBreakCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 390,
+      viewportHeight: 844,
+      responsiveSignals: {
+        viewportWidth: 390,
+        viewportHeight: 844,
+        pageWidth: 390,
+        horizontalOverflowPx: 0,
+        meaningfulOverflowThresholdPx: 4,
+        majorOverflowContainers: [],
+        overflowingContainerCount: 0,
+        severeAlignment: {
+          candidateCount: 3,
+          stackedCandidateCount: 7,
+          baselineLeftPx: 16,
+          dominantLaneLeftPx: 14,
+          dominantLaneShare: 0.43,
+          thresholdPx: 24,
+          maxLeftDeltaPx: 52,
+          candidates: [
+            {
+              selector: ".pricing-card",
+              leftDeltaPx: 52,
+              bounds: { x: 68, y: 220, width: 300, height: 140 }
+            }
+          ],
+          overlappingBlockPairCount: 1
+        },
+        mediaOverflowItems: []
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "SEVERE_ALIGNMENT_BREAK");
+  assert.equal(issue.severity, "P1");
+  assert.equal(issue.affectedSelector, ".pricing-card");
+  assert.equal(
+    issue.supportingSignals.some((signal) => signal.id === "stack-drift-repetition"),
+    true
+  );
+  assert.equal(issue.detectorSignals.stackedCandidateCount, 7);
 });
 
 test("INTERACTIVE_NO_OP flags successful interactions without visible state change", () => {
@@ -1059,4 +1255,424 @@ test("LOCALIZATION_OVERFLOW_HINT flags locale-like clipped formatted text", () =
 
   assert.equal(issue.issueType, "LOCALIZATION_OVERFLOW_HINT");
   assert.equal(issue.severity, "P2");
+});
+
+test("REQUIRED_OPTIONAL_UNCLEAR flags required fields without explicit indicator", () => {
+  const issue = requiredOptionalUnclearCheck.run({
+    snapshot: makeSnapshot({
+      formControlDescriptors: [
+        {
+          selector: "input[name='email']",
+          type: "email",
+          name: "email",
+          requiredAttr: true,
+          ariaRequired: false,
+          requiredIndicatorNearLabel: false
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "REQUIRED_OPTIONAL_UNCLEAR");
+  assert.equal(issue.severity, "P2");
+});
+
+test("INPUT_FORMAT_HELP_MISSING flags constrained input without format help", () => {
+  const issue = inputFormatHelpMissingCheck.run({
+    snapshot: makeSnapshot({
+      formControls: [
+        {
+          selector: "input[name='phone']",
+          type: "tel",
+          name: "phone",
+          placeholder: "",
+          labelText: "",
+          inViewport: true
+        }
+      ],
+      formControlDescriptors: [
+        {
+          selector: "input[name='phone']",
+          ariaLabel: "",
+          describedByTextSnippet: ""
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "INPUT_FORMAT_HELP_MISSING");
+  assert.equal(issue.severity, "P2");
+});
+
+test("TOUCH_TARGET_TOO_SMALL flags undersized controls on touch viewports", () => {
+  const issue = touchTargetTooSmallCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 390,
+      viewportHeight: 844,
+      interactive: [
+        {
+          selector: "button.icon",
+          tag: "button",
+          text: "Go",
+          ariaLabel: "",
+          disabled: false,
+          inViewport: true,
+          bounds: { x: 10, y: 10, width: 24, height: 24 }
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "TOUCH_TARGET_TOO_SMALL");
+  assert.equal(issue.severity, "P1");
+});
+
+test("MEDIA_SCALING_BROKEN flags media that overflows viewport bounds", () => {
+  const issue = mediaScalingBrokenCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 390,
+      viewportHeight: 844,
+      images: [
+        {
+          selector: "img.hero",
+          imageId: "img-1",
+          src: "https://example.com/hero.jpg",
+          inViewport: true,
+          areaRatio: 0.2,
+          bounds: { x: -8, y: 20, width: 420, height: 240 }
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "MEDIA_SCALING_BROKEN");
+  assert.equal(issue.severity, "P1");
+});
+
+test("MEDIA_SCALING_BROKEN flags non-image media overflow from responsive probes", () => {
+  const issue = mediaScalingBrokenCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 390,
+      viewportHeight: 844,
+      responsiveSignals: {
+        viewportWidth: 390,
+        viewportHeight: 844,
+        pageWidth: 390,
+        horizontalOverflowPx: 0,
+        meaningfulOverflowThresholdPx: 4,
+        majorOverflowContainers: [],
+        overflowingContainerCount: 0,
+        severeAlignment: {
+          candidateCount: 0,
+          baselineLeftPx: 0,
+          thresholdPx: 0,
+          maxLeftDeltaPx: 0,
+          candidates: [],
+          overlappingBlockPairCount: 0
+        },
+        mediaOverflowItems: [
+          {
+            selector: "video.hero",
+            tag: "video",
+            bounds: { x: -20, y: 140, width: 450, height: 260 },
+            maxOverflowPx: 60,
+            widthRatio: 1.154
+          }
+        ]
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "MEDIA_SCALING_BROKEN");
+  assert.equal(issue.affectedSelector, "video.hero");
+  assert.equal(issue.severity, "P1");
+});
+
+test("GENERIC_ACTION_LABELS flags vague action wording", () => {
+  const issue = genericActionLabelsCheck.run({
+    snapshot: makeSnapshot({
+      interactive: [
+        {
+          selector: "button.cta",
+          tag: "button",
+          text: "Continue",
+          ariaLabel: "",
+          placeholder: "",
+          disabled: false,
+          inViewport: true,
+          bounds: { x: 20, y: 120, width: 160, height: 44 }
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "GENERIC_ACTION_LABELS");
+  assert.equal(issue.severity, "P2");
+});
+
+test("IMAGE_MISSING_ALT_UIUX flags informative images missing alt text", () => {
+  const issue = imageMissingAltUiuxCheck.run({
+    snapshot: makeSnapshot({
+      images: [
+        {
+          selector: "img.product",
+          src: "https://example.com/product.png",
+          inViewport: true,
+          broken: false,
+          alt: "",
+          role: "",
+          ariaHidden: false,
+          areaRatio: 0.08
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "IMAGE_MISSING_ALT_UIUX");
+  assert.equal(issue.severity, "P2");
+});
+
+test("HEADING_ORDER_SUSPICIOUS_UIUX flags heading level jumps", () => {
+  const issue = headingOrderSuspiciousUiuxCheck.run({
+    snapshot: makeSnapshot({
+      headings: [
+        { selector: "h1", level: 1, inViewport: true },
+        { selector: "h3", level: 3, inViewport: true }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "HEADING_ORDER_SUSPICIOUS_UIUX");
+  assert.equal(issue.severity, "P2");
+});
+
+test("INTERACTIVE_NAME_MISSING_UIUX flags unlabeled controls", () => {
+  const issue = interactiveNameMissingUiuxCheck.run({
+    snapshot: makeSnapshot({
+      interactive: [
+        {
+          selector: "button.icon-only",
+          elementId: "btn-1",
+          tag: "button",
+          text: "",
+          ariaLabel: "",
+          placeholder: "",
+          disabled: false,
+          inViewport: true,
+          isPrimaryCta: false,
+          bounds: { x: 16, y: 60, width: 48, height: 48 }
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "INTERACTIVE_NAME_MISSING_UIUX");
+  assert.equal(issue.severity, "P2");
+});
+
+test("ABOVE_FOLD_OVERLOAD flags crowded top-fold UI", () => {
+  const issue = aboveFoldOverloadCheck.run({
+    snapshot: makeSnapshot({
+      interactive: Array.from({ length: 8 }, (_, index) => ({
+        selector: `button.cta-${index}`,
+        tag: "button",
+        text: `CTA ${index}`,
+        disabled: false,
+        inViewport: true,
+        bounds: { x: 10 + index * 10, y: 30 + index * 4, width: 140, height: 40 }
+      })),
+      overlays: [
+        {
+          selector: ".promo-overlay",
+          bounds: { x: 0, y: 0, width: 320, height: 220 }
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "ABOVE_FOLD_OVERLOAD");
+  assert.equal(issue.severity, "P2");
+});
+
+test("CONTENT_SCANNABILITY_POOR flags dense body text with weak heading structure", () => {
+  const issue = contentScannabilityPoorCheck.run({
+    snapshot: makeSnapshot({
+      bodyText: Array.from({ length: 320 }, () => "word").join(" "),
+      headings: []
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "CONTENT_SCANNABILITY_POOR");
+  assert.equal(issue.severity, "P2");
+});
+
+test("TABLE_CHART_MOBILE_USABILITY flags overflowing data display on smaller viewports", () => {
+  const issue = tableChartMobileUsabilityCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 768,
+      viewportHeight: 1024,
+      dataDisplaySignals: {
+        tableCount: 2,
+        chartCount: 0,
+        overflowingTableCount: 2,
+        firstOverflowingTableSelector: "table.orders",
+        problematicTableCount: 2,
+        problematicChartCount: 0,
+        poorMobileUsabilityCount: 2,
+        severePoorMobileUsabilityCount: 1,
+        firstProblematicSelector: "table.orders",
+        maxHiddenWidthPx: 312,
+        problematicRegions: [
+          {
+            selector: "table.orders",
+            kind: "table",
+            hiddenWidthPx: 312,
+            rowCount: 14,
+            columnCount: 8,
+            visibleHeaderCount: 0,
+            stackedFallback: false,
+            poorMobileUsability: true,
+            severePoorMobileUsability: true,
+            bounds: { x: 0, y: 280, width: 1080, height: 420 }
+          }
+        ]
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "TABLE_CHART_MOBILE_USABILITY");
+  assert.equal(issue.severity, "P1");
+  assert.equal(issue.judgmentPolicy, "hard-fail");
+  assert.match(issue.actual, /312px/);
+});
+
+test("TABLE_CHART_MOBILE_USABILITY emits advisory severity for borderline mobile pressure", () => {
+  const issue = tableChartMobileUsabilityCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 768,
+      viewportHeight: 1024,
+      dataDisplaySignals: {
+        tableCount: 1,
+        chartCount: 0,
+        overflowingTableCount: 1,
+        firstOverflowingTableSelector: "table.metrics",
+        problematicTableCount: 1,
+        problematicChartCount: 0,
+        poorMobileUsabilityCount: 1,
+        severePoorMobileUsabilityCount: 0,
+        firstProblematicSelector: "table.metrics",
+        maxHiddenWidthPx: 164,
+        problematicRegions: [
+          {
+            selector: "table.metrics",
+            kind: "table",
+            hiddenWidthPx: 164,
+            rowCount: 10,
+            columnCount: 5,
+            visibleHeaderCount: 1,
+            stackedFallback: false,
+            poorMobileUsability: true,
+            severePoorMobileUsability: false,
+            bounds: { x: 0, y: 280, width: 930, height: 360 }
+          }
+        ]
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "TABLE_CHART_MOBILE_USABILITY");
+  assert.equal(issue.severity, "P2");
+  assert.equal(issue.judgmentPolicy, "advisory");
+});
+
+test("TABLE_CHART_MOBILE_USABILITY does not flag mobile-friendly stacked data layout", () => {
+  const issue = tableChartMobileUsabilityCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 390,
+      viewportHeight: 844,
+      dataDisplaySignals: {
+        tableCount: 1,
+        chartCount: 0,
+        overflowingTableCount: 0,
+        firstOverflowingTableSelector: null,
+        problematicTableCount: 0,
+        problematicChartCount: 0,
+        poorMobileUsabilityCount: 0,
+        severePoorMobileUsabilityCount: 0,
+        firstProblematicSelector: null,
+        maxHiddenWidthPx: 0,
+        problematicRegions: []
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue, null);
+});
+
+test("TABLE_CHART_MOBILE_USABILITY does not run on desktop viewports", () => {
+  const issue = tableChartMobileUsabilityCheck.run({
+    snapshot: makeSnapshot({
+      viewportWidth: 1280,
+      viewportHeight: 720,
+      dataDisplaySignals: {
+        tableCount: 1,
+        chartCount: 0,
+        overflowingTableCount: 1,
+        firstOverflowingTableSelector: "table.desktop",
+        problematicTableCount: 1,
+        problematicChartCount: 0,
+        poorMobileUsabilityCount: 1,
+        severePoorMobileUsabilityCount: 1,
+        firstProblematicSelector: "table.desktop",
+        maxHiddenWidthPx: 280,
+        problematicRegions: [
+          {
+            selector: "table.desktop",
+            kind: "table",
+            hiddenWidthPx: 280,
+            poorMobileUsability: true,
+            severePoorMobileUsability: true
+          }
+        ]
+      }
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue, null);
+});
+
+test("CONSENT_BANNER_BLOCKING_TASK flags blocking consent overlays", () => {
+  const issue = consentBannerBlockingTaskCheck.run({
+    snapshot: makeSnapshot({
+      overlays: [
+        {
+          selector: ".cookie-modal",
+          text: "Cookie consent required before continuing",
+          hasDismissAction: false,
+          isBlocking: true,
+          areaRatio: 0.45,
+          bounds: { x: 0, y: 0, width: 1280, height: 500 }
+        }
+      ]
+    }),
+    evidenceRefs
+  });
+
+  assert.equal(issue.issueType, "CONSENT_BANNER_BLOCKING_TASK");
+  assert.equal(issue.severity, "P1");
 });

@@ -1,3 +1,5 @@
+import { inferAuthFormStep } from "../library/auth-fields/index.js";
+
 function normalizeText(value = "") {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -25,13 +27,60 @@ function hasUrlPathChanged(previousUrl, nextUrl) {
   }
 }
 
+function hasCredentialInputEvidence(probe = {}) {
+  const identifierDetected =
+    Boolean(probe?.identifierFieldDetected || probe?.usernameFieldDetected) ||
+    Number(probe?.identifierFieldVisibleCount ?? probe?.usernameFieldVisibleCount ?? 0) > 0;
+  const passwordDetected =
+    Boolean(probe?.passwordFieldDetected) || Number(probe?.passwordFieldVisibleCount ?? 0) > 0;
+  const otpDetected =
+    Boolean(probe?.otpFieldDetected || probe?.otpChallengeDetected) ||
+    Number(probe?.otpFieldVisibleCount ?? 0) > 0;
+  const hasInputFieldCatalogEvidence = Array.isArray(probe?.inputFields)
+    ? probe.inputFields.some((field) => {
+        const kind = normalizeLower(field?.kind);
+        return Boolean(kind && kind !== "search");
+      })
+    : false;
+  return identifierDetected || passwordDetected || otpDetected || hasInputFieldCatalogEvidence;
+}
+
+function hasStrongLoginWall(
+  probe = {},
+  visibleStep = inferAuthVisibleStep(probe),
+  credentialInputEvidence = hasCredentialInputEvidence(probe)
+) {
+  if (probe?.otpChallengeDetected || probe?.captchaDetected) {
+    return true;
+  }
+
+  const loginWallStrength = normalizeLower(probe?.loginWallStrength);
+  if (loginWallStrength === "strong" || loginWallStrength === "medium") {
+    return credentialInputEvidence;
+  }
+
+  return Boolean(
+    probe?.loginWallDetected &&
+      credentialInputEvidence &&
+      (
+        probe?.passwordFieldDetected ||
+        probe?.otpFieldDetected ||
+        visibleStep === "username" ||
+        visibleStep === "credentials" ||
+        visibleStep === "password"
+      )
+  );
+}
+
 const AUTH_ASSIST_RESUME_STATES = new Set(["authenticated", "resumed"]);
 const AUTH_ASSIST_INTERMEDIATE_STATES = new Set([
   "awaiting_username",
   "awaiting_password",
+  "awaiting_input_fields",
   "awaiting_otp",
   "auth_step_advanced",
   "submitting_credentials",
+  "submitting_input_fields",
   "submitting_otp"
 ]);
 const AUTH_ASSIST_EXPLICIT_FAILURE_CODES = new Set([
@@ -43,37 +92,7 @@ const AUTH_ASSIST_EXPLICIT_FAILURE_CODES = new Set([
 ]);
 
 export function inferAuthVisibleStep(probe = {}) {
-  const explicit = normalizeLower(probe.visibleStep);
-  if (explicit) {
-    if (["username", "password", "otp", "credentials"].includes(explicit)) {
-      return explicit;
-    }
-    if (explicit === "authenticated") {
-      return "authenticated";
-    }
-  }
-
-  if (probe.otpFieldDetected || probe.otpChallengeDetected) {
-    return "otp";
-  }
-  const identifierDetected =
-    Boolean(probe.usernameFieldDetected) ||
-    Boolean(probe.identifierFieldDetected) ||
-    Number(probe.usernameFieldVisibleCount ?? 0) > 0 ||
-    Number(probe.identifierFieldVisibleCount ?? 0) > 0;
-  if (identifierDetected && probe.passwordFieldDetected) {
-    return "credentials";
-  }
-  if (probe.passwordFieldDetected) {
-    return "password";
-  }
-  if (identifierDetected) {
-    return "username";
-  }
-  if (probe.loginWallDetected) {
-    return "credentials";
-  }
-  return "unknown";
+  return inferAuthFormStep(probe);
 }
 
 export function isAuthAssistReadyToResume(authAssist = {}) {
@@ -220,6 +239,14 @@ export function deriveAuthAssistStateFromProbe(probe = {}, context = {}) {
   const previousProbe = context.previousProbe ?? null;
   const submission = context.submission ?? null;
   const visibleStep = inferAuthVisibleStep(probe);
+  const credentialInputEvidence = hasCredentialInputEvidence(probe);
+  const strongLoginWallDetected = hasStrongLoginWall(probe, visibleStep, credentialInputEvidence);
+  const effectiveVisibleStep =
+    ["username", "password", "credentials"].includes(visibleStep) &&
+    !credentialInputEvidence &&
+    !strongLoginWallDetected
+      ? "unknown"
+      : visibleStep;
   const progression = detectAuthStepAdvance(previousProbe ?? {}, probe, submission ?? {});
   const explicitInvalid =
     Boolean(probe.invalidCredentialErrorDetected) ||
@@ -250,7 +277,7 @@ export function deriveAuthAssistStateFromProbe(probe = {}, context = {}) {
     };
   }
 
-  if (probe?.authenticatedHint || visibleStep === "authenticated") {
+  if ((probe?.authenticatedHint || effectiveVisibleStep === "authenticated") && !strongLoginWallDetected) {
     return {
       state: "authenticated",
       code: "AUTH_VALIDATED",
@@ -259,14 +286,14 @@ export function deriveAuthAssistStateFromProbe(probe = {}, context = {}) {
   }
 
   if (progression.advanced && submission?.submitTriggered) {
-    if (visibleStep === "password") {
+    if (effectiveVisibleStep === "password") {
       return {
         state: "awaiting_password",
         code: "AUTH_STEP_ADVANCED",
         reason: "Username step completed; password entry is now required."
       };
     }
-    if (visibleStep === "username") {
+    if (effectiveVisibleStep === "username") {
       return {
         state: "awaiting_username",
         code: "AUTH_STEP_ADVANCED",
@@ -280,7 +307,7 @@ export function deriveAuthAssistStateFromProbe(probe = {}, context = {}) {
     };
   }
 
-  if (visibleStep === "username") {
+  if (effectiveVisibleStep === "username" && strongLoginWallDetected) {
     return {
       state: "awaiting_username",
       code: "LOGIN_USERNAME_REQUIRED",
@@ -288,7 +315,7 @@ export function deriveAuthAssistStateFromProbe(probe = {}, context = {}) {
     };
   }
 
-  if (visibleStep === "password") {
+  if (effectiveVisibleStep === "password" && (strongLoginWallDetected || credentialInputEvidence)) {
     return {
       state: "awaiting_password",
       code: "LOGIN_PASSWORD_REQUIRED",
@@ -296,7 +323,7 @@ export function deriveAuthAssistStateFromProbe(probe = {}, context = {}) {
     };
   }
 
-  if (probe?.loginWallDetected || visibleStep === "credentials") {
+  if (strongLoginWallDetected || (effectiveVisibleStep === "credentials" && credentialInputEvidence)) {
     return {
       state: "awaiting_credentials",
       code: "LOGIN_REQUIRED",

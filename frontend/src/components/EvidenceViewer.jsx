@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { resolvePrimaryEvidenceKind } from "../lib/evidencePresentation";
 
 const UIUX_EXPLANATIONS = {
   OVERLAY_BLOCKING: {
@@ -182,12 +183,16 @@ function normalizePrimaryEvidence(primaryEvidence = null) {
   if (!primaryEvidence || typeof primaryEvidence !== "object") {
     return null;
   }
-  const ref = primaryEvidence.screenshotRef ?? primaryEvidence.ref ?? null;
+  const type = String(
+    primaryEvidence.type ??
+      (primaryEvidence.videoRef ? "video" : "screenshot")
+  ).toLowerCase();
+  const ref = primaryEvidence.ref ?? primaryEvidence.videoRef ?? primaryEvidence.screenshotRef ?? null;
   if (!ref) {
     return null;
   }
   return {
-    type: "screenshot",
+    type: type === "video" ? "video" : "screenshot",
     ref,
     captureMode: primaryEvidence.captureMode ?? "viewport",
     viewport: primaryEvidence.viewport ?? primaryEvidence.highlight?.viewport ?? null,
@@ -237,6 +242,33 @@ function useElementSize(ref, deps = []) {
 }
 
 function resolveExplanation(failure) {
+  const functionalDescription = failure?.description ?? null;
+  if (failure?.mode === "functional" && functionalDescription && typeof functionalDescription === "object") {
+    const expected = String(functionalDescription.expected ?? failure?.expected ?? "").trim();
+    const actual = String(functionalDescription.actual ?? failure?.actual ?? "").trim();
+    const whyItFailed = String(
+      functionalDescription.whyItFailed ??
+        failure?.whyItFailed ??
+        failure?.actual ??
+        "Observed behavior did not match expected behavior."
+    ).trim();
+    const whatFailed = String(
+      functionalDescription.whatFailed ?? failure?.title ?? failure?.issueType ?? "Functional assertion failed."
+    ).trim();
+    return {
+      whatHappened: whatFailed,
+      whyItFailed,
+      whyItMatters: "This indicates a functional behavior defect that blocks expected user outcomes.",
+      recommendedFix: [
+        "Replay the attached failure video to reproduce the exact sequence.",
+        "Validate route/state transitions against the expected assertion.",
+        "Fix the failing logic and rerun the functional suite."
+      ],
+      expected,
+      actual
+    };
+  }
+
   const structured = failure?.explanation ?? null;
   if (structured && typeof structured === "object") {
     const recommendedFix = Array.isArray(structured.recommendedFix)
@@ -250,7 +282,9 @@ function resolveExplanation(failure) {
         failure?.actual ??
         DEFAULT_EXPLANATION.whyItFailed,
       whyItMatters: structured.whyItMatters ?? DEFAULT_EXPLANATION.whyItMatters,
-      recommendedFix: recommendedFix.length ? recommendedFix : DEFAULT_EXPLANATION.howToFix
+      recommendedFix: recommendedFix.length ? recommendedFix : DEFAULT_EXPLANATION.howToFix,
+      expected: failure?.expected ?? "",
+      actual: failure?.actual ?? ""
     };
   }
   if (failure?.mode === "uiux") {
@@ -259,14 +293,18 @@ function resolveExplanation(failure) {
       whatHappened: mapped.whatsWrong ?? DEFAULT_EXPLANATION.whatsWrong,
       whyItFailed: failure?.actual ?? mapped.whyItFailed ?? DEFAULT_EXPLANATION.whyItFailed,
       whyItMatters: mapped.whyItMatters ?? DEFAULT_EXPLANATION.whyItMatters,
-      recommendedFix: mapped.howToFix ?? DEFAULT_EXPLANATION.howToFix
+      recommendedFix: mapped.howToFix ?? DEFAULT_EXPLANATION.howToFix,
+      expected: failure?.expected ?? "",
+      actual: failure?.actual ?? ""
     };
   }
   return {
     whatHappened: DEFAULT_EXPLANATION.whatsWrong,
     whyItFailed: failure?.actual ?? DEFAULT_EXPLANATION.whyItFailed,
     whyItMatters: DEFAULT_EXPLANATION.whyItMatters,
-    recommendedFix: DEFAULT_EXPLANATION.howToFix
+    recommendedFix: DEFAULT_EXPLANATION.howToFix,
+    expected: failure?.expected ?? "",
+    actual: failure?.actual ?? ""
   };
 }
 
@@ -298,22 +336,39 @@ export default function EvidenceViewer({ open, onClose, failure, apiBase }) {
     () => normalizePrimaryEvidence(failure?.primaryEvidence ?? null),
     [failure?.primaryEvidence]
   );
+  const isFunctionalFailure = failure?.mode === "functional";
   const screenshotRef = useMemo(
-    () => primaryEvidence?.ref ?? findEvidenceRef(failure?.evidenceRefs ?? [], "screenshot"),
-    [failure?.evidenceRefs, primaryEvidence?.ref]
+    () =>
+      primaryEvidence?.type === "screenshot"
+        ? primaryEvidence.ref
+        : findEvidenceRef(failure?.evidenceRefs ?? [], "screenshot"),
+    [failure?.evidenceRefs, primaryEvidence?.ref, primaryEvidence?.type]
   );
   const screenshotEntry = useMemo(
-    () => primaryEvidence ?? findEvidenceEntry(failure?.evidenceRefs ?? [], "screenshot"),
+    () =>
+      primaryEvidence?.type === "screenshot"
+        ? primaryEvidence
+        : findEvidenceEntry(failure?.evidenceRefs ?? [], "screenshot"),
     [failure?.evidenceRefs, primaryEvidence]
   );
   const videoRef = useMemo(
-    () => findEvidenceRef(failure?.evidenceRefs ?? [], "video"),
-    [failure?.evidenceRefs]
+    () =>
+      primaryEvidence?.type === "video"
+        ? primaryEvidence.ref
+        : findEvidenceRef(failure?.evidenceRefs ?? [], "video"),
+    [failure?.evidenceRefs, primaryEvidence?.ref, primaryEvidence?.type]
   );
   const screenshotUrl = toAbsoluteUrl(apiBase, screenshotRef);
   const videoUrl = toAbsoluteUrl(apiBase, videoRef);
+  const primaryMediaKind = resolvePrimaryEvidenceKind({
+    mode: failure?.mode ?? "",
+    videoRef: videoUrl,
+    screenshotRef: screenshotUrl
+  });
   const explanation = resolveExplanation(failure);
-  const highlight = failure?.primaryEvidence?.highlight ?? failure?.highlight ?? null;
+  const highlight = primaryMediaKind === "screenshot"
+    ? (failure?.primaryEvidence?.highlight ?? failure?.highlight ?? null)
+    : null;
 
   const overlayStyle = useMemo(() => {
     if (!showHighlight) {
@@ -377,16 +432,30 @@ export default function EvidenceViewer({ open, onClose, failure, apiBase }) {
         <div className="mt-4 grid h-[calc(100vh-110px)] min-h-0 gap-4 lg:grid-cols-[minmax(0,1.5fr)_360px]">
           <section className="min-h-0 rounded-2xl border border-white/10 bg-slate-900/70 p-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Screenshot</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">
+                {primaryMediaKind === "video" ? "Video Evidence" : "Screenshot"}
+              </p>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowHighlight((value) => !value)}
-                  className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-slate-300 hover:bg-white/[0.04]"
-                >
-                  {showHighlight ? "Hide highlight" : "Show highlight"}
-                </button>
-                {screenshotUrl ? (
+                {primaryMediaKind === "screenshot" ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowHighlight((value) => !value)}
+                    className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-slate-300 hover:bg-white/[0.04]"
+                  >
+                    {showHighlight ? "Hide highlight" : "Show highlight"}
+                  </button>
+                ) : null}
+                {primaryMediaKind === "video" && videoUrl ? (
+                  <a
+                    href={videoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 text-[11px] font-semibold text-cyan-100 hover:bg-cyan-300/20"
+                  >
+                    Open raw video
+                  </a>
+                ) : null}
+                {primaryMediaKind === "screenshot" && screenshotUrl ? (
                   <a
                     href={screenshotUrl}
                     target="_blank"
@@ -400,7 +469,13 @@ export default function EvidenceViewer({ open, onClose, failure, apiBase }) {
             </div>
 
             <div className="mt-3 flex h-[calc(100%-34px)] min-h-0 items-center justify-center overflow-auto rounded-xl border border-white/10 bg-slate-950">
-              {screenshotUrl ? (
+              {primaryMediaKind === "video" && videoUrl ? (
+                <video
+                  controls
+                  className="max-h-[72vh] w-full max-w-full rounded-lg bg-black"
+                  src={videoUrl}
+                />
+              ) : screenshotUrl ? (
                 <div className="relative inline-block max-w-full">
                   <img
                     ref={imageRef}
@@ -428,7 +503,9 @@ export default function EvidenceViewer({ open, onClose, failure, apiBase }) {
                 </div>
               ) : (
                 <div className="px-4 text-center text-sm text-slate-500">
-                  No screenshot evidence was captured for this case.
+                  {primaryMediaKind === "video"
+                    ? "No video evidence was captured for this case."
+                    : "No screenshot evidence was captured for this case."}
                 </div>
               )}
             </div>
@@ -452,14 +529,19 @@ export default function EvidenceViewer({ open, onClose, failure, apiBase }) {
               <p className="truncate">URL: {failure.pageUrl || "-"}</p>
               <p>Step: {failure.step ?? "-"}</p>
               <p>Selector: {failure.affectedSelector ?? "-"}</p>
-              {screenshotEntry?.captureMode ? <p>Capture mode: {screenshotEntry.captureMode}</p> : null}
+              {primaryMediaKind === "screenshot" && screenshotEntry?.captureMode ? (
+                <p>Capture mode: {screenshotEntry.captureMode}</p>
+              ) : null}
               {highlight?.confidence ? (
                 <p>Highlight confidence: {Math.round(Number(highlight.confidence) * 100)}%</p>
               ) : null}
               {failure.grouped ? (
                 <p>
-                  Affected devices: {failure.occurrenceCount ?? failure.devices?.length ?? 1}
+                  Affected devices: {failure.affectedDeviceCount ?? failure.devices?.length ?? 1}
                 </p>
+              ) : null}
+              {failure.grouped && failure.sourceIssueTypes?.length > 1 ? (
+                <p>Merged issue types: {failure.sourceIssueTypes.join(", ")}</p>
               ) : null}
               {failure.judgmentPolicy ? <p>Judgment policy: {failure.judgmentPolicy}</p> : null}
               {failure.supportingSignalCounts ? (
@@ -527,6 +609,28 @@ export default function EvidenceViewer({ open, onClose, failure, apiBase }) {
               </ul>
             </div>
 
+            {isFunctionalFailure ? (
+              <div className="mt-3 rounded-xl border border-cyan-300/20 bg-cyan-500/10 p-3 text-xs text-cyan-50">
+                <p className="uppercase tracking-[0.18em] text-cyan-200">Functional Failure Description</p>
+                <p className="mt-2">
+                  <span className="font-semibold text-cyan-100">What failed:</span>{" "}
+                  {failure.description?.whatFailed ?? failure.title ?? failure.issueType}
+                </p>
+                <p className="mt-2">
+                  <span className="font-semibold text-cyan-100">Expected:</span>{" "}
+                  {failure.description?.expected ?? explanation.expected ?? failure.expected ?? "-"}
+                </p>
+                <p className="mt-2">
+                  <span className="font-semibold text-cyan-100">Actual:</span>{" "}
+                  {failure.description?.actual ?? explanation.actual ?? failure.actual ?? "-"}
+                </p>
+                <p className="mt-2">
+                  <span className="font-semibold text-cyan-100">Why this is a bug:</span>{" "}
+                  {failure.description?.whyItFailed ?? explanation.whyItFailed}
+                </p>
+              </div>
+            ) : null}
+
             <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs">
               <p className="uppercase tracking-[0.18em] text-slate-500">Observed</p>
               <p className="mt-1 text-slate-200">{failure.actual ?? "No observation available."}</p>
@@ -538,7 +642,7 @@ export default function EvidenceViewer({ open, onClose, failure, apiBase }) {
               ) : null}
             </div>
 
-            {videoUrl ? (
+            {videoUrl && primaryMediaKind !== "video" ? (
               <div className="mt-3">
                 <a
                   href={videoUrl}

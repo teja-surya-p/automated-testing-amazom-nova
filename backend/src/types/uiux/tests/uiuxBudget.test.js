@@ -7,7 +7,14 @@ import {
   resolveUiuxTimeBudgetMs,
   shouldCapUiuxAllDeviceSelection
 } from "../budget.js";
+import { config } from "../../../lib/config.js";
 import { baselineUiuxChecks } from "../checks/index.js";
+
+function expectedUiuxDefaultMaxPages() {
+  const cap = Math.max(50, Number(config.uiuxMaxPagesCap ?? 2000) || 2000);
+  const fallback = Number(config.uiuxDefaultMaxPages ?? 120) || 120;
+  return Math.min(Math.max(1, fallback), cap);
+}
 
 test("resolveUiuxTimeBudgetMs prefers uiux-specific budget over generic budget", () => {
   const resolved = resolveUiuxTimeBudgetMs(
@@ -141,4 +148,23 @@ test("buildUiuxEffectiveBudget returns deterministic derived budget shape", () =
   assert.equal(budget.checkCount, baselineUiuxChecks.length);
   assert.equal(budget.deviceMode, "quick");
   assert.equal(budget.deviceSelection, "cap");
+  assert.equal(budget.strategy, "component-breakpoint");
+  assert.equal(budget.breakpointSettings.minWidth >= 240, true);
+  assert.equal(budget.breakpointSettings.maxWidth > budget.breakpointSettings.minWidth, true);
+  assert.equal(budget.sampledWidthEstimate > 0, true);
+  assert.equal(budget.sampledHeightEstimate > 0, true);
+  assert.equal(budget.sampledViewportEstimate >= budget.sampledWidthEstimate, true);
+});
+
+test("buildUiuxEffectiveBudget uses elevated default max pages for uiux coverage", () => {
+  const budget = buildUiuxEffectiveBudget({
+    runConfig: {
+      uiux: {},
+      budgets: {
+        timeBudgetMs: 200_000
+      }
+    }
+  });
+
+  assert.equal(budget.maxPages, expectedUiuxDefaultMaxPages());
 });

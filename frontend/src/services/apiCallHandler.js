@@ -1,4 +1,4 @@
-import { API_BASE_URL, API_PREFIX } from "./constants";
+import { API_BASE_URL, API_PREFIX } from "./constants.js";
 
 function normalizeApiPath(path = "") {
   const value = String(path || "");

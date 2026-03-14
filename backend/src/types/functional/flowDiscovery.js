@@ -1,7 +1,10 @@
 import { hashText } from "../../lib/utils.js";
 import { extractFormSemantics } from "./formSemantics.js";
 
-const DESTRUCTIVE_HINT = /delete|remove|close account|pay|purchase|checkout|unsubscribe|reset|wipe|logout|sign out/i;
+const DESTRUCTIVE_HINT =
+  /delete|remove|close account|pay|purchase|checkout|unsubscribe|reset|wipe|logout|log out|sign out|signout|sign off|signoff|end session|session end|leave workspace|switch account/i;
+const DESTRUCTIVE_ROUTE_HINT =
+  /\/(logout|log(?:out|off)|sign(?:out|[-_]?out)|end[-_]?session|session[-_]?end|signoff)\b|[?&](?:logout|signout|signoff)=/i;
 const CLEAR_FILTER_HINT = /clear|reset|remove filter|all products|all results/i;
 const ITEM_LINK_HINT = /product|item|details|view|open/i;
 
@@ -10,8 +13,23 @@ function normalizeText(value = "") {
 }
 
 function isSafeElement(element) {
-  const text = [element.text, element.ariaLabel, element.placeholder, element.name].join(" ");
-  return !DESTRUCTIVE_HINT.test(text);
+  const text = [
+    element.text,
+    element.ariaLabel,
+    element.placeholder,
+    element.name,
+    element.href,
+    element.selector,
+    element.onClick
+  ].join(" ");
+  if (DESTRUCTIVE_HINT.test(text)) {
+    return false;
+  }
+  const href = String(element?.href ?? "").trim();
+  if (href && DESTRUCTIVE_ROUTE_HINT.test(href)) {
+    return false;
+  }
+  return true;
 }
 
 function scoreElement(element, scoreConfig) {

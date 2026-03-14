@@ -13,7 +13,23 @@ import {
 import { config } from "../lib/config.js";
 import { hashText, sleep } from "../lib/utils.js";
 import { validateActionResult } from "../library/schemas/actionContract.js";
-import { buildCredentialActionPlan } from "./authInteractionPolicy.js";
+import {
+  AUTH_CONTROL_QUERY_SELECTOR,
+  AUTH_FIELD_QUERY_SELECTOR,
+  OTP_HINT_PATTERN_SOURCE,
+  OTP_SELECTOR,
+  PASSWORD_SELECTOR,
+  SEARCH_HINT_PATTERN_SOURCE,
+  SUBMIT_CONTROL_PATTERN_SOURCE,
+  SUBMIT_SELECTOR,
+  USERNAME_HINT_PATTERN_SOURCE,
+  USERNAME_SELECTOR,
+  buildCredentialActionPlan,
+  deriveAuthInputFieldsFromContext,
+  deriveAuthSubmitActionFromControls,
+  normalizeSubmittedInputFieldValues,
+  resolveFirstCredentialAlias
+} from "../library/auth-fields/index.js";
 import {
   detectAuthStepAdvance,
   inferAuthVisibleStep
@@ -45,30 +61,6 @@ function sanitizeFilename(name = "download.bin") {
   return String(name).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
 }
 
-function resolveFirstCredentialAlias(credentials = {}) {
-  const aliases = [
-    credentials?.identifier,
-    credentials?.accessKey,
-    credentials?.access_key,
-    credentials?.username,
-    credentials?.email,
-    credentials?.loginId,
-    credentials?.login_id,
-    credentials?.accountId,
-    credentials?.account_id,
-    credentials?.userId,
-    credentials?.user_id
-  ];
-
-  for (const alias of aliases) {
-    const normalized = String(alias ?? "").trim();
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return "";
-}
-
 export class BrowserSession {
   constructor(sessionId, options = {}) {
     this.sessionId = sessionId;
@@ -91,7 +83,9 @@ export class BrowserSession {
     this.networkSummary = {
       totalRequests: 0,
       failedRequests: 0,
+      abortedRequests: 0,
       status4xx: 0,
+      status429: 0,
       status5xx: 0,
       lastFailures: [],
       downloads: [],
@@ -385,6 +379,11 @@ export class BrowserSession {
   }
 
   async launch() {
+    const captureVideoMode = this.runConfig?.artifacts?.captureVideo ?? "fail-only";
+    const shouldRecordVideo =
+      captureVideoMode === "always" ||
+      (captureVideoMode === "fail-only" && this.isFunctionalMode());
+
     await fs.mkdir(this.framesDir, { recursive: true });
     await fs.mkdir(this.consoleDir, { recursive: true });
     await fs.mkdir(this.networkDir, { recursive: true });
@@ -397,7 +396,7 @@ export class BrowserSession {
     if (this.runConfig?.artifacts?.captureA11ySnapshot) {
       await fs.mkdir(this.a11yDir, { recursive: true });
     }
-    if (this.runConfig?.artifacts?.captureVideo === "always") {
+    if (shouldRecordVideo) {
       await fs.mkdir(this.videoDir, { recursive: true });
     }
 
@@ -420,7 +419,7 @@ export class BrowserSession {
       };
     }
 
-    if (this.runConfig?.artifacts?.captureVideo === "always") {
+    if (shouldRecordVideo) {
       contextOptions.recordVideo = {
         dir: this.videoDir,
         size: { width: 1440, height: 900 }
@@ -474,17 +473,22 @@ export class BrowserSession {
 
     this.page.on("requestfailed", (request) => {
       this.networkSummary.totalRequests += 1;
-      this.networkSummary.failedRequests += 1;
+      const failureText = request.failure()?.errorText ?? "request failed";
+      const isAbortedFailure = /err_aborted|aborted/i.test(failureText);
+      if (isAbortedFailure) {
+        this.networkSummary.abortedRequests += 1;
+      } else {
+        this.networkSummary.failedRequests += 1;
+      }
       const requestStartedAt = this.requestStartTimes.get(request) ?? Date.now();
       this.requestStartTimes.delete(request);
-      if (request.isNavigationRequest() && request.resourceType() === "document") {
+      if (request.isNavigationRequest() && request.resourceType() === "document" && !isAbortedFailure) {
         this.networkSummary.mainDocumentFailed = true;
         this.networkSummary.mainDocumentUrl = request.url().slice(0, 280);
         this.networkSummary.mainDocumentContentType = null;
       }
 
       if (this.isFunctionalMode() && this.isApiResourceType(request.resourceType())) {
-        const failureText = request.failure()?.errorText ?? "request failed";
         const timedOut = /timed out|timeout|net::err_timed_out/i.test(failureText);
         const durationMs = Math.max(Date.now() - requestStartedAt, 0);
         this.appendFunctionalNetworkRecord({
@@ -511,7 +515,8 @@ export class BrowserSession {
           url: request.url().slice(0, 280),
           status: null,
           timestamp: new Date().toISOString(),
-          failureText: request.failure()?.errorText ?? "request failed"
+          failureText,
+          isAbortedFailure
         }
       ].slice(-20);
     });
@@ -532,6 +537,9 @@ export class BrowserSession {
       }
       if (status >= 400 && status < 500) {
         this.networkSummary.status4xx += 1;
+        if (status === 429) {
+          this.networkSummary.status429 += 1;
+        }
       }
       if (status >= 500) {
         this.networkSummary.status5xx += 1;
@@ -2940,16 +2948,57 @@ export class BrowserSession {
         };
       });
 
+      function resolveFormName(element) {
+        const form = element.closest("form");
+        if (!form) {
+          return "";
+        }
+        const headingText = (
+          form.querySelector("h1, h2, h3, h4, legend, [role='heading']")?.textContent || ""
+        )
+          .replace(/\s+/g, " ")
+          .trim();
+        return (
+          form.getAttribute("aria-label") ||
+          form.getAttribute("name") ||
+          headingText ||
+          form.getAttribute("id") ||
+          ""
+        )
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 140);
+      }
+
+      function resolveNearestHeading(element) {
+        const heading = element
+          .closest("form, section, article, main, [role='main'], div")
+          ?.querySelector("h1, h2, h3, h4, legend, [role='heading']");
+        return (heading?.textContent || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 140);
+      }
+
       const formControls = formControlElements
         .map((element, index) => {
           const bounds = getBounds(element);
           const descriptor = formControlDescriptors[index] ?? null;
+          const closestForm = element.closest("form");
           const labels = element instanceof HTMLElement && "labels" in element ? Array.from(element.labels ?? []) : [];
           const labelText = labels
             .map((label) => label.textContent?.trim() ?? "")
             .join(" ")
             .replace(/\s+/g, " ")
             .trim();
+          const options = element.tagName.toLowerCase() === "select"
+            ? Array.from(element.querySelectorAll("option"))
+                .slice(0, 15)
+                .map((option) => ({
+                  value: option.value ?? "",
+                  text: (option.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120)
+                }))
+            : [];
           return {
             controlId: `fc-${index + 1}`,
             selector: makeSelector(element),
@@ -2959,9 +3008,19 @@ export class BrowserSession {
             placeholder: element.getAttribute("placeholder") ?? "",
             ariaLabel: element.getAttribute("aria-label") ?? "",
             labelText,
+            labelOrPlaceholder:
+              labelText ||
+              element.getAttribute("placeholder") ||
+              element.getAttribute("aria-label") ||
+              element.getAttribute("name") ||
+              "",
             hasAssociatedLabel: Boolean(labelText),
             requiredAttr: descriptor?.requiredAttr ?? false,
             ariaRequired: descriptor?.ariaRequired ?? false,
+            formSelector: closestForm ? makeSelector(closestForm) : "",
+            formName: resolveFormName(element),
+            nearestHeading: resolveNearestHeading(element),
+            options,
             inViewport: isInViewport(bounds),
             bounds
           };
@@ -3135,6 +3194,381 @@ export class BrowserSession {
           isStaticContentPage: (articleLike || documentationLike) && wordCount >= 300 && visibleInteractiveCount <= 3
         };
       })();
+
+      const responsiveSignals = uiuxSignalsEnabled ? (() => {
+        const computedPageWidth = Math.max(
+          document.documentElement.scrollWidth,
+          document.body.scrollWidth,
+          viewportWidth
+        );
+        const horizontalOverflowPx = Math.max(0, computedPageWidth - viewportWidth);
+        const meaningfulOverflowThresholdPx = Math.max(4, Math.round(viewportWidth * 0.01));
+        const majorOverflowThresholdPx = Math.max(18, Math.round(viewportWidth * 0.05));
+
+        function median(values = []) {
+          const sorted = [...values].sort((left, right) => left - right);
+          if (!sorted.length) {
+            return 0;
+          }
+          const center = Math.floor(sorted.length / 2);
+          return sorted.length % 2 === 0
+            ? (sorted[center - 1] + sorted[center]) / 2
+            : sorted[center];
+        }
+
+        const overflowCandidates = Array.from(
+          document.querySelectorAll(
+            "main, [role='main'], section, article, form, nav, header, footer, .container, .content, .layout, .card, [data-testid], [data-qa], [data-component]"
+          )
+        )
+          .filter((element) => isElementVisible(element))
+          .slice(0, 220)
+          .map((element, index) => {
+            const rect = element.getBoundingClientRect();
+            const bounds = getBounds(element);
+            const leftOverflowPx = Math.max(0, 0 - rect.left);
+            const rightOverflowPx = Math.max(0, rect.right - viewportWidth);
+            const rectOverflowPx = Math.max(leftOverflowPx, rightOverflowPx);
+            const scrollOverflowPx = Math.max(0, element.scrollWidth - Math.max(Math.min(element.clientWidth, viewportWidth), 1));
+            const parent = element.parentElement;
+            const parentOverflowPx = parent
+              ? Math.max(0, parent.scrollWidth - Math.max(Math.min(parent.clientWidth, viewportWidth), 1))
+              : 0;
+            const overflowPx = Math.max(rectOverflowPx, scrollOverflowPx, parentOverflowPx);
+            const widthPressureRatio = viewportWidth > 0 ? rect.width / viewportWidth : 0;
+            return {
+              id: `overflow-container-${index + 1}`,
+              selector: makeSelector(element),
+              bounds,
+              overflowPx,
+              rectOverflowPx,
+              scrollOverflowPx,
+              parentOverflowPx,
+              widthPressureRatio,
+              clientWidth: Math.round(element.clientWidth),
+              scrollWidth: Math.round(element.scrollWidth)
+            };
+          })
+          .filter((entry) => entry.overflowPx >= meaningfulOverflowThresholdPx)
+          .sort((left, right) => right.overflowPx - left.overflowPx);
+
+        const majorOverflowContainers = overflowCandidates
+          .filter((entry) => entry.overflowPx >= majorOverflowThresholdPx && entry.widthPressureRatio >= 0.32)
+          .slice(0, 8);
+
+        const stackedLayoutCandidates = Array.from(
+          document.querySelectorAll(
+            "main > *, [role='main'] > *, section, article, form, .card, [data-card], .list-item, [data-list-item], [data-row], [class*='grid'] > *, [class*='row'] > *, [data-component], [data-testid]"
+          )
+        )
+          .filter((element) => isElementVisible(element))
+          .slice(0, 220)
+          .map((element, index) => {
+            const rect = element.getBoundingClientRect();
+            const widthRatio = viewportWidth > 0 ? rect.width / viewportWidth : 0;
+            if (rect.height < 20) {
+              return null;
+            }
+            if (widthRatio < 0.28 && rect.width < 140) {
+              return null;
+            }
+            if (rect.bottom < -48 || rect.top > viewportHeight + 48) {
+              return null;
+            }
+            return {
+              id: `layout-${index + 1}`,
+              selector: makeSelector(element),
+              bounds: getBounds(element),
+              x: rect.left,
+              y: rect.top,
+              width: rect.width,
+              height: rect.height,
+              widthRatio
+            };
+          })
+          .filter(Boolean)
+          .sort((left, right) => left.y - right.y)
+          .slice(0, 120);
+
+        const alignmentBaselineCandidates = stackedLayoutCandidates
+          .slice(0, Math.min(8, stackedLayoutCandidates.length))
+          .map((entry) => entry.x);
+        const laneBucketPx = Math.max(12, Math.round(viewportWidth * 0.03));
+        const laneBuckets = new Map();
+        for (const entry of stackedLayoutCandidates) {
+          const lane = Math.round(entry.x / laneBucketPx) * laneBucketPx;
+          laneBuckets.set(lane, (laneBuckets.get(lane) ?? 0) + 1);
+        }
+        const dominantLane = [...laneBuckets.entries()].sort((left, right) => {
+          if (right[1] !== left[1]) {
+            return right[1] - left[1];
+          }
+          return left[0] - right[0];
+        })[0] ?? null;
+        const dominantLaneLeftPx = Number(dominantLane?.[0] ?? median(alignmentBaselineCandidates));
+        const dominantLaneShare = stackedLayoutCandidates.length
+          ? Number(((dominantLane?.[1] ?? 0) / stackedLayoutCandidates.length).toFixed(3))
+          : 0;
+        const baselineLeftPx = dominantLaneShare >= 0.34
+          ? dominantLaneLeftPx
+          : median(alignmentBaselineCandidates);
+        const alignmentDeltaThresholdPx = Math.max(16, Math.round(viewportWidth * 0.055));
+        const severeAlignmentCandidates = stackedLayoutCandidates
+          .map((entry) => ({
+            ...entry,
+            leftDeltaPx: Math.abs(entry.x - baselineLeftPx)
+          }))
+          .filter((entry) =>
+            entry.leftDeltaPx >= alignmentDeltaThresholdPx &&
+            (entry.widthRatio >= 0.3 || entry.height >= 44)
+          )
+          .sort((left, right) => right.leftDeltaPx - left.leftDeltaPx)
+          .slice(0, 8);
+
+        let overlappingBlockPairCount = 0;
+        for (let leftIndex = 0; leftIndex < stackedLayoutCandidates.length; leftIndex += 1) {
+          const left = stackedLayoutCandidates[leftIndex];
+          for (let rightIndex = leftIndex + 1; rightIndex < stackedLayoutCandidates.length; rightIndex += 1) {
+            const right = stackedLayoutCandidates[rightIndex];
+            const overlapX = Math.max(
+              0,
+              Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x)
+            );
+            const overlapY = Math.max(
+              0,
+              Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y)
+            );
+            if (!overlapX || !overlapY) {
+              continue;
+            }
+            const overlapArea = overlapX * overlapY;
+            const smallerArea = Math.max(Math.min(left.width * left.height, right.width * right.height), 1);
+            if (overlapArea / smallerArea >= 0.14) {
+              overlappingBlockPairCount += 1;
+            }
+          }
+        }
+
+        const mediaOverflowItems = Array.from(
+          document.querySelectorAll("img, video, canvas, svg, iframe, [role='img'], .hero, [data-media]")
+        )
+          .filter((element) => isElementVisible(element))
+          .slice(0, 80)
+          .map((element, index) => {
+            const rect = element.getBoundingClientRect();
+            const overflowLeftPx = Math.max(0, 0 - rect.left);
+            const overflowRightPx = Math.max(0, rect.right - viewportWidth);
+            const overflowTopPx = Math.max(0, 0 - rect.top);
+            const overflowBottomPx = Math.max(0, rect.bottom - viewportHeight);
+            const maxOverflowPx = Math.max(overflowLeftPx, overflowRightPx, overflowTopPx, overflowBottomPx);
+            return {
+              mediaId: `media-overflow-${index + 1}`,
+              selector: makeSelector(element),
+              tag: element.tagName.toLowerCase(),
+              bounds: getBounds(element),
+              maxOverflowPx,
+              overflowLeftPx,
+              overflowRightPx,
+              overflowTopPx,
+              overflowBottomPx,
+              widthRatio: viewportWidth > 0 ? Number((rect.width / viewportWidth).toFixed(3)) : 0
+            };
+          })
+          .filter((entry) => entry.maxOverflowPx >= 8 || entry.widthRatio >= 1.05)
+          .sort((left, right) => right.maxOverflowPx - left.maxOverflowPx)
+          .slice(0, 12);
+
+        return {
+          viewportWidth,
+          viewportHeight,
+          pageWidth: computedPageWidth,
+          horizontalOverflowPx,
+          meaningfulOverflowThresholdPx,
+          majorOverflowContainers,
+          overflowingContainerCount: overflowCandidates.length,
+          severeAlignment: {
+            stackedCandidateCount: stackedLayoutCandidates.length,
+            candidateCount: severeAlignmentCandidates.length,
+            baselineLeftPx: Number(baselineLeftPx.toFixed(1)),
+            dominantLaneLeftPx: Number(dominantLaneLeftPx.toFixed(1)),
+            dominantLaneShare,
+            thresholdPx: alignmentDeltaThresholdPx,
+            maxLeftDeltaPx: Number((severeAlignmentCandidates[0]?.leftDeltaPx ?? 0).toFixed(1)),
+            candidates: severeAlignmentCandidates.map((entry) => ({
+              selector: entry.selector,
+              leftDeltaPx: Number(entry.leftDeltaPx.toFixed(1)),
+              bounds: entry.bounds
+            })),
+            overlappingBlockPairCount
+          },
+          mediaOverflowItems
+        };
+      })() : {
+        viewportWidth: viewportWidth ?? 0,
+        viewportHeight: viewportHeight ?? 0,
+        pageWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth, viewportWidth),
+        horizontalOverflowPx: 0,
+        meaningfulOverflowThresholdPx: 4,
+        majorOverflowContainers: [],
+        overflowingContainerCount: 0,
+        severeAlignment: {
+          stackedCandidateCount: 0,
+          candidateCount: 0,
+          baselineLeftPx: 0,
+          dominantLaneLeftPx: 0,
+          dominantLaneShare: 0,
+          thresholdPx: 0,
+          maxLeftDeltaPx: 0,
+          candidates: [],
+          overlappingBlockPairCount: 0
+        },
+        mediaOverflowItems: []
+      };
+
+      const dataDisplaySignals = uiuxSignalsEnabled ? (() => {
+        const mobileViewport = viewportWidth <= 900;
+        const tableElements = Array.from(
+          document.querySelectorAll(
+            "table, [role='table'], .table, [data-table], .data-table"
+          )
+        ).filter((element) => isElementVisible(element));
+        const chartElements = Array.from(
+          document.querySelectorAll(
+            "canvas, svg, [role='img'], .chart, [data-chart]"
+          )
+        ).filter((element) => isElementVisible(element));
+        const overflowingTables = tableElements.filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return (
+            element.scrollWidth > element.clientWidth + 24 ||
+            rect.width > viewportWidth + 24
+          );
+        });
+
+        const tableRegions = tableElements
+          .slice(0, 20)
+          .map((element, index) => {
+            const rect = element.getBoundingClientRect();
+            const bounds = getBounds(element);
+            const container = element.closest(".table-responsive, .overflow-x-auto, .overflow-auto, [data-scroll-container]");
+            const containerOverflowPx = container
+              ? Math.max(0, container.scrollWidth - Math.max(Math.min(container.clientWidth, viewportWidth), 1))
+              : 0;
+            const elementScrollOverflowPx = Math.max(0, element.scrollWidth - Math.max(Math.min(element.clientWidth, viewportWidth), 1));
+            const rectOverflowPx = Math.max(
+              0,
+              Math.max(rect.right - viewportWidth, 0, 0 - rect.left)
+            );
+            const hiddenWidthPx = Math.max(containerOverflowPx, elementScrollOverflowPx, rectOverflowPx);
+            const headerCells = Array.from(element.querySelectorAll("thead th, [role='columnheader']"));
+            const visibleHeaderCount = headerCells.filter((header) => isElementVisible(header)).length;
+            const rowCount = element.querySelectorAll("tbody tr, [role='row']").length;
+            const columnCount = Math.max(
+              Array.from(element.querySelectorAll("tr"))
+                .slice(0, 4)
+                .reduce((max, row) => Math.max(max, row.querySelectorAll("th, td").length), 0),
+              headerCells.length
+            );
+            const bodyCells = Array.from(element.querySelectorAll("tbody td, [role='cell']")).slice(0, 40);
+            const labeledBodyCellCount = bodyCells.filter((cell) => {
+              const dataLabel = cell.getAttribute("data-label") || cell.getAttribute("aria-label");
+              return String(dataLabel || "").trim().length > 0;
+            }).length;
+            const rowDisplayBlock = Array.from(element.querySelectorAll("tbody tr")).some((row) => {
+              const style = window.getComputedStyle(row);
+              return style.display === "block" || style.display === "grid" || style.display === "flex";
+            });
+            const stackedFallback =
+              element.matches(".table-stacked, .table-cards, [data-mobile-table='stacked'], [data-mobile-table='cards']") ||
+              (labeledBodyCellCount >= Math.max(2, Math.floor(bodyCells.length * 0.35)) && rowDisplayBlock);
+            const poorMobileUsability =
+              mobileViewport &&
+              (
+                (hiddenWidthPx >= 120 && !stackedFallback) ||
+                (columnCount >= 5 && hiddenWidthPx >= 72 && !stackedFallback) ||
+                (visibleHeaderCount === 0 && columnCount >= 4 && !stackedFallback)
+              );
+            const severePoorMobileUsability =
+              poorMobileUsability &&
+              (
+                hiddenWidthPx >= 240 ||
+                (visibleHeaderCount === 0 && hiddenWidthPx >= 120) ||
+                (columnCount >= 8 && hiddenWidthPx >= 120)
+              );
+
+            return {
+              regionId: `table-region-${index + 1}`,
+              selector: makeSelector(element),
+              kind: "table",
+              bounds,
+              hiddenWidthPx,
+              containerOverflowPx,
+              elementScrollOverflowPx,
+              rectOverflowPx,
+              rowCount,
+              columnCount,
+              visibleHeaderCount,
+              stackedFallback,
+              poorMobileUsability,
+              severePoorMobileUsability
+            };
+          });
+
+        const chartRegions = chartElements
+          .slice(0, 20)
+          .map((element, index) => {
+            const rect = element.getBoundingClientRect();
+            const bounds = getBounds(element);
+            const overflowLeftPx = Math.max(0, 0 - rect.left);
+            const overflowRightPx = Math.max(0, rect.right - viewportWidth);
+            const hiddenWidthPx = Math.max(overflowLeftPx, overflowRightPx);
+            const poorMobileUsability = mobileViewport && hiddenWidthPx >= 72;
+            const severePoorMobileUsability = mobileViewport && hiddenWidthPx >= 180;
+            return {
+              regionId: `chart-region-${index + 1}`,
+              selector: makeSelector(element),
+              kind: "chart",
+              bounds,
+              hiddenWidthPx,
+              poorMobileUsability,
+              severePoorMobileUsability
+            };
+          });
+
+        const problematicRegions = [...tableRegions, ...chartRegions]
+          .filter((entry) => entry.poorMobileUsability)
+          .sort((left, right) => (right.hiddenWidthPx ?? 0) - (left.hiddenWidthPx ?? 0))
+          .slice(0, 8);
+
+        return {
+          tableCount: tableElements.length,
+          chartCount: chartElements.length,
+          overflowingTableCount: overflowingTables.length,
+          firstOverflowingTableSelector: overflowingTables[0] ? makeSelector(overflowingTables[0]) : null,
+          problematicTableCount: tableRegions.filter((entry) => entry.poorMobileUsability).length,
+          problematicChartCount: chartRegions.filter((entry) => entry.poorMobileUsability).length,
+          poorMobileUsabilityCount: problematicRegions.length,
+          severePoorMobileUsabilityCount: problematicRegions.filter((entry) => entry.severePoorMobileUsability).length,
+          firstProblematicSelector: problematicRegions[0]?.selector ?? null,
+          maxHiddenWidthPx: problematicRegions.reduce(
+            (max, entry) => Math.max(max, Number(entry.hiddenWidthPx ?? 0)),
+            0
+          ),
+          problematicRegions
+        };
+      })() : {
+        tableCount: 0,
+        chartCount: 0,
+        overflowingTableCount: 0,
+        firstOverflowingTableSelector: null,
+        problematicTableCount: 0,
+        problematicChartCount: 0,
+        poorMobileUsabilityCount: 0,
+        severePoorMobileUsabilityCount: 0,
+        firstProblematicSelector: null,
+        maxHiddenWidthPx: 0,
+        problematicRegions: []
+      };
 
       const stateSignals = uiuxSignalsEnabled ? (() => {
         const textFor = (item) =>
@@ -3495,6 +3929,8 @@ export class BrowserSession {
         errorBanners,
         textOverflowItems,
         contentHints,
+        dataDisplaySignals,
+        responsiveSignals,
         stateSignals,
         pageTypeHints,
         primaryNavLabels,
@@ -3547,6 +3983,8 @@ export class BrowserSession {
         errorBanners: pageState.errorBanners.map((item) => item.text),
         primaryCta: pageState.primaryCta?.selector ?? pageState.primaryCta?.elementId ?? null,
         textOverflow: pageState.textOverflowItems.map((item) => item.selector || item.text),
+        dataDisplaySignals: pageState.dataDisplaySignals,
+        responsiveSignals: pageState.responsiveSignals,
         pageTypeHints: pageState.pageTypeHints,
         primaryNavLabels: pageState.primaryNavLabels,
         h1Text: pageState.h1Text,
@@ -4173,16 +4611,302 @@ export class BrowserSession {
     return /\bsearch\b|what do you want to watch|query/.test(haystack);
   }
 
+  normalizeBoolean(value) {
+    if (typeof value === "boolean") {
+      return value;
+    }
+    const normalized = String(value ?? "")
+      .trim()
+      .toLowerCase();
+    return ["1", "true", "yes", "on", "checked"].includes(normalized);
+  }
+
+  resolveAutoFormValue(field = {}, context = {}) {
+    const label = [
+      field.label,
+      field.placeholder,
+      field.ariaLabel,
+      field.name,
+      field.type
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const now = Date.now();
+    const date = new Date();
+    const isoDate = date.toISOString().slice(0, 10);
+
+    if (field.tag === "select") {
+      return field.options?.[1]?.value ?? field.options?.[0]?.value ?? "";
+    }
+    if (field.tag === "textarea" || /\bmessage|notes?|description|comment\b/.test(label)) {
+      return `Automated functional test input for ${context.description || "form validation"}.`;
+    }
+    if (/\bemail|e-mail\b/.test(label)) {
+      return `qa.user+${now}@example.com`;
+    }
+    if (/\bpassword|passcode|pin\b/.test(label)) {
+      return "QaAuto!23456";
+    }
+    if (/\b(phone|mobile|tel|contact)\b/.test(label)) {
+      return "5551234567";
+    }
+    if (/\bsearch|query|find\b/.test(label)) {
+      return "test query";
+    }
+    if (/\bname|full name|first name|last name\b/.test(label)) {
+      return "Test User";
+    }
+    if (/\baddress|street|city|state|country|zip|postal\b/.test(label)) {
+      return "123 Test Street";
+    }
+    if (/\b(company|organization|organisation|business)\b/.test(label)) {
+      return "QA Labs";
+    }
+    if (/\b(url|website|link)\b/.test(label)) {
+      return "https://example.com";
+    }
+    if (/\b(otp|verification|code|token|access key|invite|id)\b/.test(label)) {
+      return "AUTO123456";
+    }
+    if (/\b(date|dob|birth)\b/.test(label) || field.type === "date") {
+      return isoDate;
+    }
+    if (field.type === "number") {
+      return "11";
+    }
+    if (field.type === "checkbox" || field.type === "radio") {
+      return true;
+    }
+    return "test input";
+  }
+
+  pickDecisionValue(field = {}, values = {}) {
+    if (!values || typeof values !== "object") {
+      return undefined;
+    }
+    const candidates = [
+      field.fieldId,
+      field.selector,
+      field.name,
+      field.label
+    ].filter(Boolean);
+
+    for (const key of candidates) {
+      if (Object.prototype.hasOwnProperty.call(values, key)) {
+        return values[key];
+      }
+    }
+    return undefined;
+  }
+
+  async fillFormFieldBySelector(field = {}, value, mode = "submit") {
+    if (!field?.selector) {
+      return {
+        fieldId: field?.fieldId ?? null,
+        selector: field?.selector ?? null,
+        filled: false,
+        skipped: "missing-selector"
+      };
+    }
+
+    const locator = this.page.locator(field.selector).first();
+    await locator.waitFor({ state: "visible", timeout: 2_500 });
+
+    const tag = String(field.tag ?? "").toLowerCase();
+    const type = String(field.type ?? "").toLowerCase();
+
+    if (tag === "select") {
+      const optionValue = value ?? field.options?.[1]?.value ?? field.options?.[0]?.value ?? "";
+      if (!optionValue) {
+        return {
+          fieldId: field.fieldId ?? null,
+          selector: field.selector,
+          filled: false,
+          skipped: "no-select-option"
+        };
+      }
+      await locator.selectOption(String(optionValue)).catch(async () => {
+        const fallback = await locator.locator("option").first().getAttribute("value").catch(() => null);
+        if (fallback !== null) {
+          await locator.selectOption(String(fallback));
+        }
+      });
+      return {
+        fieldId: field.fieldId ?? null,
+        selector: field.selector,
+        filled: true,
+        value: String(optionValue)
+      };
+    }
+
+    if (type === "checkbox" || type === "radio") {
+      const shouldEnable = this.normalizeBoolean(value);
+      if (shouldEnable) {
+        await locator.check({ force: true }).catch(async () => {
+          await locator.click({ force: true });
+        });
+      } else if (type === "checkbox") {
+        await locator.uncheck({ force: true }).catch(() => {});
+      }
+      return {
+        fieldId: field.fieldId ?? null,
+        selector: field.selector,
+        filled: true,
+        value: shouldEnable
+      };
+    }
+
+    if (type === "file") {
+      return {
+        fieldId: field.fieldId ?? null,
+        selector: field.selector,
+        filled: false,
+        skipped: "file-input"
+      };
+    }
+
+    const normalized = value === undefined || value === null ? "" : String(value);
+    if (mode === "submit" && normalized.length === 0) {
+      return {
+        fieldId: field.fieldId ?? null,
+        selector: field.selector,
+        filled: false,
+        skipped: "empty-user-value"
+      };
+    }
+
+    await locator.fill(normalized);
+    return {
+      fieldId: field.fieldId ?? null,
+      selector: field.selector,
+      filled: true,
+      value: normalized
+    };
+  }
+
+  async submitFormAssistGroup(group = {}, decision = {}) {
+    if (!this.page) {
+      throw new Error("No active page is available for form submission.");
+    }
+
+    const mode = decision.action === "auto" ? "auto" : "submit";
+    const readiness = this.actionReadinessConfig();
+    const fields = Array.isArray(group.fields) ? group.fields : [];
+    const values = decision.values ?? {};
+    const description = String(decision.description ?? group.description ?? "").trim();
+    const fieldResults = [];
+
+    for (const field of fields) {
+      const userValue = this.pickDecisionValue(field, values);
+      const value = mode === "auto" ? this.resolveAutoFormValue(field, { description }) : userValue;
+      try {
+        const result = await this.fillFormFieldBySelector(field, value, mode);
+        fieldResults.push(result);
+      } catch (error) {
+        fieldResults.push({
+          fieldId: field.fieldId ?? null,
+          selector: field.selector ?? null,
+          filled: false,
+          skipped: "fill-error",
+          error: error?.message ?? "Failed to fill form field."
+        });
+      }
+    }
+
+    let submitTriggered = false;
+    const submitSelector = decision.submitSelector ?? group.submitSelector ?? null;
+    const submitLabel = decision.submitLabel ?? group.submitLabel ?? null;
+
+    const submitFromLocator = async (selector) => {
+      if (!selector) {
+        return false;
+      }
+      const locator = this.page.locator(selector).first();
+      const count = await locator.count().catch(() => 0);
+      if (!count) {
+        return false;
+      }
+      await locator.scrollIntoViewIfNeeded().catch(() => {});
+      await locator.click({ timeout: config.clickTimeoutMs }).catch(() => {});
+      return true;
+    };
+
+    if (submitSelector) {
+      submitTriggered = await submitFromLocator(submitSelector);
+    }
+
+    if (!submitTriggered && group.formSelector) {
+      const submitCandidates = [
+        `${group.formSelector} button[type='submit']`,
+        `${group.formSelector} input[type='submit']`,
+        `${group.formSelector} button`,
+        `${group.formSelector} [role='button']`
+      ];
+      for (const selector of submitCandidates) {
+        // Attempt deterministic submit selection within the discovered form scope.
+        if (await submitFromLocator(selector)) {
+          submitTriggered = true;
+          break;
+        }
+      }
+    }
+
+    if (!submitTriggered) {
+      const genericSubmit = this.page
+        .locator("button[type='submit'], input[type='submit'], button, [role='button']")
+        .filter({
+          hasText: /submit|save|continue|next|go|search|send|apply|login|sign in|verify|confirm/i
+        })
+        .first();
+      const exists = await genericSubmit.count().catch(() => 0);
+      if (exists) {
+        await genericSubmit.click({ timeout: config.clickTimeoutMs }).catch(() => {});
+        submitTriggered = true;
+      }
+    }
+
+    if (!submitTriggered) {
+      const firstFieldSelector = fields[0]?.selector ?? null;
+      if (firstFieldSelector) {
+        const locator = this.page.locator(firstFieldSelector).first();
+        await locator.focus().catch(() => {});
+        await this.page.keyboard.press("Enter").catch(() => {});
+        submitTriggered = true;
+      }
+    }
+
+    await this.waitForUIReady(readiness.strategy, readiness.timeoutMs);
+    await this.page.waitForTimeout(readiness.settleMs);
+
+    return {
+      success: true,
+      mode,
+      submitTriggered,
+      submitSelector,
+      submitLabel,
+      fieldResults
+    };
+  }
+
   async collectAuthFormProbe() {
     if (!this.page) {
       return this.buildAuthProbeFallback("No active page is available.");
     }
 
-    return this.page
-      .evaluate(() => {
+    const baseProbe = await this.page
+      .evaluate((shared) => {
         function normalize(value = "") {
           return String(value ?? "").replace(/\s+/g, " ").trim();
         }
+
+        const identifierHintPattern = new RegExp(shared.identifierHintPatternSource, "i");
+        const searchHintPattern = new RegExp(shared.searchHintPatternSource, "i");
+        const otpHintPattern = new RegExp(shared.otpHintPatternSource, "i");
+        const usernameSelector = String(shared.usernameSelector || "");
+        const passwordSelector = String(shared.passwordSelector || "");
+        const otpSelector = String(shared.otpSelector || "");
+        const submitSelector = String(shared.submitSelector || "");
 
         function isActionable(element, { editable = false } = {}) {
           if (!element || !(element instanceof HTMLElement)) {
@@ -4274,48 +4998,6 @@ export class BrowserSession {
         const bodyText = normalize(document.body?.innerText || "").toLowerCase();
         const path = (new URL(pageUrl).pathname || "").toLowerCase();
         const title = normalize(document.title || "").toLowerCase();
-        const identifierHintPattern =
-          /\b(email|e-mail|username|user name|user|login|identifier|account|phone|mobile|access key|account id|employee id|user id|member id|workspace id|tenant id|organization id|organisation id|customer id|login id|sign[-\s]?in id|handle|short code|portal key|staff id|staff portal key)\b/;
-        const searchHintPattern = /\b(search|query|find)\b/;
-        const otpHintPattern = /\b(otp|verification|verify|code|2fa|two[-\s]?factor|one[-\s]?time|security code)\b/;
-
-        const usernameSelector = [
-          "input[autocomplete='email']",
-          "input[type='email']",
-          "input[autocomplete='username']",
-          "input[name*='email' i]",
-          "input[id*='email' i]",
-          "input[name*='user' i]",
-          "input[id*='user' i]",
-          "input[name*='login' i]"
-        ].join(",");
-        const passwordSelector = "input[type='password'], input[autocomplete='current-password']";
-        const otpSelector =
-          [
-            "input[autocomplete='one-time-code']",
-            "input[inputmode='numeric'][name*='code' i]",
-            "input[name*='otp' i]",
-            "input[id*='otp' i]",
-            "input[name*='code' i]",
-            "input[id*='code' i]",
-            "input[name*='verification' i]",
-            "input[id*='verification' i]"
-          ].join(",");
-        const submitSelector =
-          [
-            "button[type='submit']",
-            "input[type='submit']",
-            "[role='button'][aria-label*='submit' i]",
-            "button[aria-label*='sign in' i]",
-            "button[aria-label*='log in' i]",
-            "button[aria-label*='verify' i]",
-            "button[aria-label*='continue' i]",
-            "button[aria-label*='next' i]",
-            "[role='button'][aria-label*='continue' i]",
-            "a[role='button'][aria-label*='continue' i]",
-            "a[role='button'][aria-label*='next' i]"
-          ].join(",");
-
         function fieldHaystack(field) {
           return normalize(
             [
@@ -4386,7 +5068,7 @@ export class BrowserSession {
         const usernameFieldPresentCountRaw = all(usernameSelector).length;
         const passwordFieldPresentCount = all(passwordSelector).length;
         const otpFieldPresentCount = all(otpSelector).length;
-        const identifierFieldsPresent = all("input, textarea").filter((field) =>
+        const identifierFieldsPresent = all(shared.authFieldQuerySelector || "input, textarea").filter((field) =>
           isIdentifierCandidate(field, { requireActionable: false })
         );
         const identifierFieldsVisible = identifierFieldsPresent.filter((field) =>
@@ -4428,7 +5110,8 @@ export class BrowserSession {
         );
 
         const keywordControls = all(
-          "button, input[type='button'], input[type='submit'], [role='button'], a[role='button'], a[href]"
+          shared.authControlQuerySelector ||
+            "button, input[type='button'], input[type='submit'], [role='button'], a[role='button'], a[href]"
         );
         const submitKeywordHit = keywordControls.some((element) => {
           if (!isActionable(element)) {
@@ -4467,12 +5150,7 @@ export class BrowserSession {
           /\blogin\b|\bsign-?in\b|\bauth\b/.test(path) ||
           /\blog in\b|\bsign in\b/.test(title) ||
           /\blog in\b|\bsign in\b|\bverify\b/.test(authHeadingText);
-        const loginWallDetected =
-          passwordFieldDetected ||
-          identifierFieldDetected ||
-          usernameFieldDetected ||
-          loginIntentTextDetected ||
-          (submitControlDetected && loginIntentTextDetected);
+        const authIntentDetected = loginIntentTextDetected || authSubmitKeywordHit;
         const otpChallengeDetected =
           otpFieldDetected ||
           /\bverification code\b|\bone-time code\b|\botp\b|\btwo-factor\b|\b2fa\b|\bsecurity code\b/.test(bodyText);
@@ -4511,6 +5189,48 @@ export class BrowserSession {
           /\binvalid\b|\bincorrect\b|\bwrong\b|\bexpired\b|\btry again\b|\bfailed\b/.test(invalidErrorText) &&
           /\bcode\b|\botp\b|\bverification\b|\b2fa\b|\btwo-factor\b/.test(invalidErrorText);
 
+        const hasCredentialPair = passwordFieldDetected && (identifierFieldDetected || usernameFieldDetected);
+        const hasSingleStepPasswordGate =
+          passwordFieldDetected &&
+          (authIntentDetected || submitControlDetected || authSubmitKeywordHit);
+        const hasUsernameAuthStep =
+          !passwordFieldDetected &&
+          (identifierFieldDetected || usernameFieldDetected) &&
+          (authIntentDetected || authSubmitKeywordHit || submitControlDetected);
+
+        let loginWallStrength = "none";
+        let authClassificationReason = "No strong authentication wall detected.";
+        if (otpChallengeDetected) {
+          loginWallStrength = "strong";
+          authClassificationReason = "OTP challenge detected.";
+        } else if (captchaDetected) {
+          loginWallStrength = "strong";
+          authClassificationReason = "CAPTCHA challenge detected.";
+        } else if (hasCredentialPair) {
+          loginWallStrength = "strong";
+          authClassificationReason = "Identifier and password fields are visible in an auth form.";
+        } else if (hasSingleStepPasswordGate) {
+          loginWallStrength = "strong";
+          authClassificationReason = "Password step is visible in an auth context.";
+        } else if (hasUsernameAuthStep) {
+          loginWallStrength = "medium";
+          authClassificationReason = "Identifier step is visible with explicit auth intent.";
+        } else if ((identifierFieldDetected || usernameFieldDetected) && !authIntentDetected) {
+          loginWallStrength = "weak";
+          authClassificationReason = "Identifier-like field detected without strong auth-wall context.";
+        } else if (
+          authIntentDetected &&
+          submitControlDetected &&
+          (identifierFieldDetected || usernameFieldDetected || passwordFieldDetected || otpFieldDetected)
+        ) {
+          loginWallStrength = "medium";
+          authClassificationReason = "Auth intent and submit controls are visible with credential field evidence.";
+        } else if (authIntentDetected && submitControlDetected) {
+          loginWallStrength = "weak";
+          authClassificationReason = "Auth-like controls are visible, but credential fields are not confirmed.";
+        }
+        const loginWallDetected = loginWallStrength === "strong" || loginWallStrength === "medium";
+
         const profileMarkerVisible = hasActionableSelector(
           [
             "button[aria-label*='account' i]",
@@ -4521,15 +5241,27 @@ export class BrowserSession {
             "button[aria-label*='logout' i]"
           ].join(",")
         );
+        const authenticatedSignalStrength =
+          profileMarkerVisible
+            ? "strong"
+            : (
+                !loginWallDetected &&
+                !otpChallengeDetected &&
+                !captchaDetected &&
+                !invalidCredentialErrorDetected &&
+                !/\blogin\b|\bsign-?in\b|\bauth\b/.test(path)
+              )
+                ? "medium"
+                : "weak";
         const authenticatedHint =
-          profileMarkerVisible ||
-          (
-            !loginWallDetected &&
-            !otpChallengeDetected &&
-            !captchaDetected &&
-            !invalidCredentialErrorDetected &&
-            !/\blogin\b|\bsign-?in\b|\bauth\b/.test(path)
-          );
+          authenticatedSignalStrength === "strong" || authenticatedSignalStrength === "medium";
+
+        const hasCredentialFieldEvidence = Boolean(
+          identifierFieldDetected ||
+          usernameFieldDetected ||
+          passwordFieldDetected ||
+          otpFieldDetected
+        );
 
         let visibleStep = "unknown";
         if (otpFieldDetected || otpChallengeDetected) {
@@ -4538,11 +5270,11 @@ export class BrowserSession {
           visibleStep = "credentials";
         } else if (passwordFieldDetected) {
           visibleStep = "password";
-        } else if (usernameFieldDetected || identifierFieldDetected) {
+        } else if ((usernameFieldDetected || identifierFieldDetected) && loginWallDetected) {
           visibleStep = "username";
         } else if (authenticatedHint) {
           visibleStep = "authenticated";
-        } else if (loginWallDetected) {
+        } else if (loginWallDetected && hasCredentialFieldEvidence) {
           visibleStep = "credentials";
         }
 
@@ -4559,7 +5291,7 @@ export class BrowserSession {
           nextRecommendedAction = "RESUME_FLOW";
         }
 
-        let reason = "No authentication wall detected.";
+        let reason = authClassificationReason;
         if (captchaDetected) {
           reason = "CAPTCHA challenge detected.";
         } else if (otpChallengeDetected) {
@@ -4570,10 +5302,10 @@ export class BrowserSession {
           reason = "Password step is visible.";
         } else if (visibleStep === "username") {
           reason = "Username/email step is visible.";
-        } else if (visibleStep === "credentials") {
+        } else if (hasCredentialPair) {
           reason = "Identifier and password fields are visible on the same step.";
-        } else if (loginWallDetected) {
-          reason = "Login wall detected.";
+        } else if (visibleStep === "credentials") {
+          reason = authClassificationReason || "Login credentials are required.";
         } else if (authenticatedHint) {
           reason = "Authenticated markers are visible.";
         }
@@ -4595,6 +5327,10 @@ export class BrowserSession {
           passwordFieldDetected,
           otpFieldDetected,
           submitControlDetected,
+          authIntentDetected,
+          loginWallStrength,
+          authenticatedSignalStrength,
+          authClassificationReason,
           usernameFieldPresentCount,
           usernameFieldVisibleCount,
           identifierFieldPresentCount,
@@ -4613,8 +5349,56 @@ export class BrowserSession {
           nextRecommendedAction,
           reason
         };
+      }, {
+        identifierHintPatternSource: USERNAME_HINT_PATTERN_SOURCE,
+        searchHintPatternSource: SEARCH_HINT_PATTERN_SOURCE,
+        otpHintPatternSource: OTP_HINT_PATTERN_SOURCE,
+        usernameSelector: USERNAME_SELECTOR,
+        passwordSelector: PASSWORD_SELECTOR,
+        otpSelector: OTP_SELECTOR,
+        submitSelector: SUBMIT_SELECTOR,
+        authFieldQuerySelector: AUTH_FIELD_QUERY_SELECTOR,
+        authControlQuerySelector: AUTH_CONTROL_QUERY_SELECTOR
       })
       .catch(() => this.buildAuthProbeFallback("Unable to inspect authentication state."));
+
+    const interactionContext = await this.collectAuthInteractionContext().catch(() => ({
+      pageUrl: baseProbe?.pageUrl ?? this.page?.url?.() ?? "",
+      stepHint: baseProbe?.visibleStep ?? "unknown",
+      fields: [],
+      controls: []
+    }));
+    const contextFields = Array.isArray(interactionContext?.fields)
+      ? interactionContext.fields
+      : [];
+    const contextControls = Array.isArray(interactionContext?.controls)
+      ? interactionContext.controls
+      : [];
+    const catalogWithSelectors = deriveAuthInputFieldsFromContext(contextFields, {
+      includeSelectors: true
+    });
+    const visibleInputFields = catalogWithSelectors.map((field) => ({
+      key: field.key,
+      label: field.label,
+      placeholder: field.placeholder,
+      kind: field.kind,
+      secret: field.secret,
+      required: field.required,
+      position: field.position
+    }));
+    const activeFormSelector =
+      catalogWithSelectors.find((field) => field.kind === "password" && field.formSelector)?.formSelector ??
+      catalogWithSelectors.find((field) => !field.secret && field.formSelector)?.formSelector ??
+      null;
+    const submitAction = deriveAuthSubmitActionFromControls(contextControls, {
+      activeFormSelector
+    });
+
+    return {
+      ...baseProbe,
+      inputFields: visibleInputFields,
+      submitAction
+    };
   }
 
   buildAuthProbeFallback(reason = "Unable to inspect authentication state.") {
@@ -4628,6 +5412,9 @@ export class BrowserSession {
         }
       })(),
       loginWallDetected: false,
+      loginWallStrength: "none",
+      authenticatedSignalStrength: "weak",
+      authClassificationReason: reason,
       otpChallengeDetected: false,
       captchaDetected: false,
       usernameFieldDetected: false,
@@ -4635,6 +5422,7 @@ export class BrowserSession {
       passwordFieldDetected: false,
       otpFieldDetected: false,
       submitControlDetected: false,
+      authIntentDetected: false,
       usernameFieldPresentCount: 0,
       usernameFieldVisibleCount: 0,
       identifierFieldPresentCount: 0,
@@ -4651,6 +5439,8 @@ export class BrowserSession {
       invalidCredentialReason: null,
       authenticatedHint: false,
       nextRecommendedAction: "WAIT_FOR_LOGIN",
+      inputFields: [],
+      submitAction: null,
       reason
     };
   }
@@ -4666,13 +5456,13 @@ export class BrowserSession {
     }
 
     return this.page
-      .evaluate(() => {
+      .evaluate((shared) => {
         const markerAttribute = "data-sentinel-auth-marker";
         let markerCounter = 0;
-        const identifierHintPattern =
-          /\b(email|e-mail|username|user name|user|login|identifier|account|phone|mobile|access key|account id|employee id|user id|member id|workspace id|tenant id|organization id|organisation id|customer id|login id|sign[-\s]?in id|handle|short code|portal key|staff id|staff portal key)\b/;
-        const searchHintPattern = /\b(search|query|find)\b/;
-        const otpHintPattern = /\b(otp|verification|verify|code|2fa|two[-\s]?factor|one[-\s]?time|security code)\b/;
+        const identifierHintPattern = new RegExp(shared.identifierHintPatternSource, "i");
+        const searchHintPattern = new RegExp(shared.searchHintPatternSource, "i");
+        const otpHintPattern = new RegExp(shared.otpHintPatternSource, "i");
+        const submitControlPattern = new RegExp(shared.submitControlPatternSource, "i");
 
         function normalize(value = "") {
           return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -4865,7 +5655,9 @@ export class BrowserSession {
           return false;
         }
 
-        const fieldNodes = Array.from(document.querySelectorAll("input, textarea"));
+        const fieldNodes = Array.from(
+          document.querySelectorAll(shared.authFieldQuerySelector || "input, textarea")
+        );
         const fields = fieldNodes.map((field) => {
           const rect = field.getBoundingClientRect();
           const selectors = selectorSet(field);
@@ -4897,19 +5689,20 @@ export class BrowserSession {
 
         const controlNodes = Array.from(
           document.querySelectorAll(
-            [
-              "button",
-              "input[type='submit']",
-              "input[type='button']",
-              "[role='button']",
-              "a[role='button']",
-              "a[href]",
-              "div[role='button']",
-              "span[role='button']",
-              "div[onclick]",
-              "span[onclick]",
-              "[tabindex]"
-            ].join(",")
+            shared.authControlQuerySelector ||
+              [
+                "button",
+                "input[type='submit']",
+                "input[type='button']",
+                "[role='button']",
+                "a[role='button']",
+                "a[href]",
+                "div[role='button']",
+                "span[role='button']",
+                "div[onclick]",
+                "span[onclick]",
+                "[tabindex]"
+              ].join(",")
           )
         );
         const controls = controlNodes.map((control) => {
@@ -4931,7 +5724,7 @@ export class BrowserSession {
             inViewport: elementWithinViewport(rect),
             isSubmitLike:
               type === "submit" ||
-              /\b(sign in|log in|login|submit|continue|next|verify|confirm|allow|proceed)\b/i.test(label),
+              submitControlPattern.test(label),
             formSelector: formSelector(control),
             top: rect.top,
             left: rect.left,
@@ -4959,9 +5752,13 @@ export class BrowserSession {
           sameFormHasSubmitControl: Boolean(field.formSelector && submitLikeForms.has(field.formSelector))
         }));
 
-        const hasVisibleOtpField = enrichedFields.some((field) => field.actionable && /\b(otp|verification|code|one-time|2fa)\b/i.test(
-          [field.label, field.ariaLabel, field.placeholder, field.name, field.id, field.autocomplete].join(" ")
-        ));
+        const hasVisibleOtpField = enrichedFields.some(
+          (field) =>
+            field.actionable &&
+            otpHintPattern.test(
+              [field.label, field.ariaLabel, field.placeholder, field.name, field.id, field.autocomplete].join(" ")
+            )
+        );
         const hasVisiblePasswordField = enrichedFields.some((field) => field.actionable && field.inputType === "password");
         const identifierVisibleFields = enrichedFields.filter((field) => isLikelyIdentifierField(field));
         const hasVisibleUsernameField = identifierVisibleFields.length > 0;
@@ -5001,6 +5798,13 @@ export class BrowserSession {
           ).length,
           identifierLabelCandidates
         };
+      }, {
+        identifierHintPatternSource: USERNAME_HINT_PATTERN_SOURCE,
+        searchHintPatternSource: SEARCH_HINT_PATTERN_SOURCE,
+        otpHintPatternSource: OTP_HINT_PATTERN_SOURCE,
+        submitControlPatternSource: SUBMIT_CONTROL_PATTERN_SOURCE,
+        authFieldQuerySelector: AUTH_FIELD_QUERY_SELECTOR,
+        authControlQuerySelector: AUTH_CONTROL_QUERY_SELECTOR
       })
       .catch(() => ({
         pageUrl: this.page?.url?.() ?? "",
@@ -5034,10 +5838,19 @@ export class BrowserSession {
     }
 
     return this.page
-      .evaluate(({ actionPlan, userValue, passValue }) => {
+      .evaluate(({ actionPlan, userValue, passValue, shared }) => {
         function normalize(value = "") {
           return String(value ?? "").replace(/\s+/g, " ").trim();
         }
+
+        const identifierHintPattern = new RegExp(
+          shared?.identifierHintPatternSource || "",
+          "i"
+        );
+        const submitControlPattern = new RegExp(
+          shared?.submitControlPatternSource || "",
+          "i"
+        );
 
         function isActionable(element, { editable = false } = {}) {
           if (!element || !(element instanceof HTMLElement)) {
@@ -5112,8 +5925,10 @@ export class BrowserSession {
               ].join(",")
             )
           );
-          const keywordPattern =
-            /\b(email|username|user|login|identifier|access key|account id|employee id|user id|member id|workspace id|tenant id|organization id|customer id|login id|sign[-\s]?in id|handle|short code|portal key|staff id)\b/i;
+          const keywordPattern = identifierHintPattern;
+          let preferredFormCandidate = null;
+          let hintedCandidate = null;
+          let firstActionable = null;
           for (const field of candidates) {
             if (!isActionable(field, { editable: true })) {
               continue;
@@ -5121,6 +5936,9 @@ export class BrowserSession {
             const type = normalize(field.getAttribute("type")).toLowerCase();
             if (type === "password" || type === "hidden") {
               continue;
+            }
+            if (!firstActionable) {
+              firstActionable = field;
             }
             const haystack = normalize(
               [
@@ -5135,14 +5953,23 @@ export class BrowserSession {
               ].join(" ")
             );
             const form = field.form ?? field.closest("form");
-            if (preferredForm && form && preferredForm !== form && !keywordPattern.test(haystack)) {
-              continue;
-            }
-            if (keywordPattern.test(haystack) || (preferredForm && form && preferredForm === form)) {
+            const hintMatch = keywordPattern.test(haystack);
+            const samePreferredForm = Boolean(preferredForm && form && preferredForm === form);
+            if (samePreferredForm && hintMatch) {
               return field;
             }
+            if (!hintedCandidate && hintMatch) {
+              hintedCandidate = field;
+            }
+            if (!preferredFormCandidate && samePreferredForm) {
+              preferredFormCandidate = field;
+            }
           }
-          return candidates.find((field) => isActionable(field, { editable: true })) ?? null;
+          if (preferredForm) {
+            // Do not leak into unrelated forms when we already know which auth form to target.
+            return preferredFormCandidate;
+          }
+          return hintedCandidate ?? firstActionable;
         }
 
         function findFallbackPasswordField(preferredForm = null) {
@@ -5178,7 +6005,37 @@ export class BrowserSession {
               ].join(",")
             )
           );
-          const keywordPattern = /\b(sign in|log in|login|submit|continue|next|verify|confirm|allow|proceed)\b/i;
+          const keywordPattern = submitControlPattern;
+          if (preferredForm) {
+            let preferredSubmitLike = null;
+            let preferredAny = null;
+            for (const control of candidates) {
+              if (!isActionable(control)) {
+                continue;
+              }
+              const form = control.closest("form");
+              if (form !== preferredForm) {
+                continue;
+              }
+              const label = normalize(
+                control.textContent ||
+                control.getAttribute("aria-label") ||
+                control.getAttribute("value") ||
+                control.getAttribute("title") ||
+                ""
+              );
+              const type = normalize(control.getAttribute("type")).toLowerCase();
+              const submitLike = type === "submit" || keywordPattern.test(label);
+              if (submitLike) {
+                preferredSubmitLike = preferredSubmitLike ?? control;
+              }
+              preferredAny = preferredAny ?? control;
+            }
+            if (preferredSubmitLike || preferredAny) {
+              return preferredSubmitLike ?? preferredAny;
+            }
+          }
+
           for (const control of candidates) {
             if (!isActionable(control)) {
               continue;
@@ -5190,15 +6047,13 @@ export class BrowserSession {
               control.getAttribute("title") ||
               ""
             );
-            const form = control.closest("form");
-            if (preferredForm && form && preferredForm !== form && !keywordPattern.test(label)) {
-              continue;
-            }
-            if (keywordPattern.test(label) || (preferredForm && form && preferredForm === form)) {
+            const type = normalize(control.getAttribute("type")).toLowerCase();
+            if (keywordPattern.test(label) || type === "submit") {
               return control;
             }
           }
-          return candidates.find((control) => isActionable(control)) ?? null;
+          // Avoid clicking arbitrary non-auth controls as a fallback no-op.
+          return null;
         }
 
         function fillField(field, value) {
@@ -5415,7 +6270,11 @@ export class BrowserSession {
       }, {
         actionPlan: plan ?? {},
         userValue: String(usernameValue ?? ""),
-        passValue: String(passwordValue ?? "")
+        passValue: String(passwordValue ?? ""),
+        shared: {
+          identifierHintPatternSource: USERNAME_HINT_PATTERN_SOURCE,
+          submitControlPatternSource: SUBMIT_CONTROL_PATTERN_SOURCE
+        }
       })
       .catch(() => ({
         ok: false,
@@ -5533,10 +6392,20 @@ export class BrowserSession {
       }
 
       const authenticatedByRuntime = await this.isAuthenticated();
-      const credentialFieldsVisible = Boolean(
-        probe.identifierFieldDetected || probe.usernameFieldDetected || probe.passwordFieldDetected
-      );
-      if ((probe.authenticatedHint || authenticatedByRuntime) && !credentialFieldsVisible) {
+      const loginWallStrength = String(probe?.loginWallStrength ?? "").trim().toLowerCase();
+      const strongLoginWallVisible = ["strong", "medium"].includes(loginWallStrength)
+        ? true
+        : Boolean(
+            probe.passwordFieldDetected ||
+              (probe.loginWallDetected &&
+                (
+                  probe.passwordFieldDetected ||
+                  probe.otpFieldDetected ||
+                  probe.otpChallengeDetected ||
+                  probe.submitControlDetected
+                ))
+          );
+      if ((probe.authenticatedHint || authenticatedByRuntime) && !strongLoginWallVisible) {
         return {
           state: "authenticated",
           code: "AUTH_VALIDATED",
@@ -5619,6 +6488,1287 @@ export class BrowserSession {
       code: "AUTH_UNKNOWN_STATE",
       reason: probe.reason || "Authentication state remains inconclusive after bounded verification.",
       probe
+    };
+  }
+
+  async submitAuthInputFields({ inputFields = {} } = {}) {
+    if (!this.page) {
+      return {
+        success: false,
+        code: "NO_ACTIVE_PAGE",
+        reason: "No active browser page is available."
+      };
+    }
+
+    const normalizedInputFields = normalizeSubmittedInputFieldValues(inputFields);
+    if (Object.keys(normalizedInputFields).length === 0) {
+      return {
+        success: false,
+        code: "INVALID_AUTH_INPUT_FIELDS",
+        reason: "At least one input field value is required."
+      };
+    }
+
+    await this.waitForUIReady(
+      this.runConfig?.readiness?.uiReadyStrategy,
+      this.runConfig?.readiness?.readyTimeoutMs
+    ).catch(() => {});
+
+    const previousProbe = await this.collectAuthFormProbe();
+    const interactionContext = await this.collectAuthInteractionContext();
+    const detectedFields = deriveAuthInputFieldsFromContext(interactionContext?.fields ?? [], {
+      includeSelectors: true
+    });
+
+    if (!Array.isArray(detectedFields) || detectedFields.length === 0) {
+      return {
+        success: false,
+        code: "AUTH_FIELDS_NOT_DETECTED",
+        reason: "No actionable input fields were detected on the authentication page.",
+        inputFieldsConsumed: false,
+        fillExecutionAttempted: false,
+        fillExecutionSucceeded: false,
+        fieldTargetsResolvedCount: 0,
+        fieldTargetsFilledCount: 0,
+        fieldTargetsVerifiedCount: 0,
+        focusedFieldKeys: [],
+        submitTriggered: false,
+        submitControlResolved: false,
+        submitControlType: "none",
+        selectedControlLabel: null,
+        explicitInvalidCredentialErrorDetected: false,
+        identifierFilled: false,
+        usernameFilled: false,
+        passwordFilled: false,
+        browserActionExecuted: false,
+        postSubmitUrlChanged: false,
+        postSubmitUrl: previousProbe?.pageUrl ?? null,
+        postSubmitProbeState: inferAuthVisibleStep(previousProbe),
+        authenticated: false,
+        probe: previousProbe,
+        form: {
+          identifierFieldDetected: Boolean(previousProbe?.identifierFieldDetected || previousProbe?.usernameFieldDetected),
+          usernameFieldDetected: Boolean(previousProbe?.usernameFieldDetected || previousProbe?.identifierFieldDetected),
+          passwordFieldDetected: Boolean(previousProbe?.passwordFieldDetected),
+          otpFieldDetected: Boolean(previousProbe?.otpFieldDetected),
+          submitControlDetected: Boolean(previousProbe?.submitControlDetected),
+          visibleStep: previousProbe?.visibleStep ?? inferAuthVisibleStep(previousProbe),
+          identifierFieldVisibleCount: Number(previousProbe?.identifierFieldVisibleCount ?? previousProbe?.usernameFieldVisibleCount ?? 0),
+          identifierLabelCandidates: Array.isArray(previousProbe?.identifierLabelCandidates)
+            ? previousProbe.identifierLabelCandidates.slice(0, 5)
+            : [],
+          usernameFieldVisibleCount: Number(previousProbe?.usernameFieldVisibleCount ?? 0),
+          passwordFieldVisibleCount: Number(previousProbe?.passwordFieldVisibleCount ?? 0),
+          inputFields: [],
+          submitAction: null
+        }
+      };
+    }
+
+    const valueByKey = {};
+    const submittedEntries = Object.entries(normalizedInputFields)
+      .map(([key, value]) => [String(key ?? "").trim().toLowerCase(), String(value ?? "")])
+      .filter(([key, value]) => key.length > 0 && value.length > 0);
+    const consumedSubmittedKeys = new Set();
+
+    const takeSubmittedValue = (predicate) => {
+      for (const [key, value] of submittedEntries) {
+        if (consumedSubmittedKeys.has(key)) {
+          continue;
+        }
+        if (predicate(key, value)) {
+          consumedSubmittedKeys.add(key);
+          return value;
+        }
+      }
+      return "";
+    };
+
+    const isPasswordLikeKey = (key = "") =>
+      /\b(pass|password|pwd)\b/.test(String(key ?? "").toLowerCase());
+    const isOtpLikeKey = (key = "") =>
+      /\b(otp|code|verification|2fa|one_time)\b/.test(String(key ?? "").toLowerCase());
+    const isFirstCredentialLikeKey = (key = "") =>
+      /\b(user|username|email|identifier|login|account|access|member|tenant|workspace|organization|organisation|customer|portal|id|key)\b/.test(
+        String(key ?? "").toLowerCase()
+      );
+
+    for (const field of detectedFields) {
+      const key = String(field?.key ?? "").trim().toLowerCase();
+      if (!key) {
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(normalizedInputFields, key)) {
+        valueByKey[key] = normalizedInputFields[key];
+        consumedSubmittedKeys.add(key);
+      }
+    }
+
+    const firstNonSecretField = detectedFields.find((field) => !field.secret && field.kind !== "otp");
+    const passwordField = detectedFields.find((field) => field.kind === "password");
+    const otpField = detectedFields.find((field) => field.kind === "otp");
+
+    if (firstNonSecretField && !valueByKey[firstNonSecretField.key]) {
+      const firstCredentialAlias = resolveFirstCredentialAlias(normalizedInputFields);
+      if (firstCredentialAlias) {
+        valueByKey[firstNonSecretField.key] = firstCredentialAlias;
+      } else {
+        const fallbackFirstCredential = takeSubmittedValue((key) =>
+          isFirstCredentialLikeKey(key) && !isPasswordLikeKey(key) && !isOtpLikeKey(key)
+        );
+        if (fallbackFirstCredential) {
+          valueByKey[firstNonSecretField.key] = fallbackFirstCredential;
+        }
+      }
+    }
+
+    if (passwordField && !valueByKey[passwordField.key]) {
+      if (normalizedInputFields.password) {
+        valueByKey[passwordField.key] = normalizedInputFields.password;
+        consumedSubmittedKeys.add("password");
+      } else {
+        const fallbackPassword = takeSubmittedValue((key) => isPasswordLikeKey(key));
+        if (fallbackPassword) {
+          valueByKey[passwordField.key] = fallbackPassword;
+        }
+      }
+    }
+
+    const otpAlias = normalizedInputFields.otp ?? normalizedInputFields.code ?? normalizedInputFields.verification_code;
+    if (otpField && !valueByKey[otpField.key] && otpAlias) {
+      valueByKey[otpField.key] = otpAlias;
+      consumedSubmittedKeys.add("otp");
+      consumedSubmittedKeys.add("code");
+      consumedSubmittedKeys.add("verification_code");
+    } else if (otpField && !valueByKey[otpField.key]) {
+      const fallbackOtp = takeSubmittedValue((key) => isOtpLikeKey(key));
+      if (fallbackOtp) {
+        valueByKey[otpField.key] = fallbackOtp;
+      }
+    }
+
+    for (const field of detectedFields) {
+      if (Object.prototype.hasOwnProperty.call(valueByKey, field.key)) {
+        continue;
+      }
+      const fallbackValue =
+        field.kind === "password"
+          ? takeSubmittedValue((key) => isPasswordLikeKey(key))
+          : field.kind === "otp"
+            ? takeSubmittedValue((key) => isOtpLikeKey(key))
+            : takeSubmittedValue(
+                (key) =>
+                  (isFirstCredentialLikeKey(key) && !isPasswordLikeKey(key) && !isOtpLikeKey(key)) ||
+                  (!isPasswordLikeKey(key) && !isOtpLikeKey(key))
+              );
+      if (fallbackValue) {
+        valueByKey[field.key] = fallbackValue;
+      }
+    }
+
+    const orderedEntries = detectedFields
+      .filter((field) => Object.prototype.hasOwnProperty.call(valueByKey, field.key))
+      .map((field) => ({
+        key: field.key,
+        label: field.label,
+        placeholder: field.placeholder,
+        kind: field.kind,
+        secret: Boolean(field.secret),
+        value: String(valueByKey[field.key] ?? ""),
+        primarySelector: field.primarySelector ?? null,
+        fallbackSelector: field.fallbackSelector ?? null,
+        formSelector: field.formSelector ?? null
+      }));
+
+    if (orderedEntries.length === 0) {
+      return {
+        success: false,
+        code: "AUTH_INPUT_FIELDS_UNMAPPED",
+        reason: "Submitted input fields do not match currently detected login fields.",
+        inputFieldsConsumed: false,
+        fillExecutionAttempted: false,
+        fillExecutionSucceeded: false,
+        fieldTargetsResolvedCount: 0,
+        fieldTargetsFilledCount: 0,
+        fieldTargetsVerifiedCount: 0,
+        focusedFieldKeys: [],
+        submitTriggered: false,
+        submitControlResolved: false,
+        submitControlType: "none",
+        selectedControlLabel: null,
+        explicitInvalidCredentialErrorDetected: false,
+        identifierFilled: false,
+        usernameFilled: false,
+        passwordFilled: false,
+        browserActionExecuted: false,
+        postSubmitUrlChanged: false,
+        postSubmitUrl: previousProbe?.pageUrl ?? null,
+        postSubmitProbeState: inferAuthVisibleStep(previousProbe),
+        authenticated: false,
+        probe: previousProbe,
+        form: {
+          identifierFieldDetected: Boolean(previousProbe?.identifierFieldDetected || previousProbe?.usernameFieldDetected),
+          usernameFieldDetected: Boolean(previousProbe?.usernameFieldDetected || previousProbe?.identifierFieldDetected),
+          passwordFieldDetected: Boolean(previousProbe?.passwordFieldDetected),
+          otpFieldDetected: Boolean(previousProbe?.otpFieldDetected),
+          submitControlDetected: Boolean(previousProbe?.submitControlDetected),
+          visibleStep: previousProbe?.visibleStep ?? inferAuthVisibleStep(previousProbe),
+          identifierFieldVisibleCount: Number(previousProbe?.identifierFieldVisibleCount ?? previousProbe?.usernameFieldVisibleCount ?? 0),
+          identifierLabelCandidates: Array.isArray(previousProbe?.identifierLabelCandidates)
+            ? previousProbe.identifierLabelCandidates.slice(0, 5)
+            : [],
+          usernameFieldVisibleCount: Number(previousProbe?.usernameFieldVisibleCount ?? 0),
+          passwordFieldVisibleCount: Number(previousProbe?.passwordFieldVisibleCount ?? 0),
+          inputFields: detectedFields.map((field) => ({
+            key: field.key,
+            label: field.label,
+            placeholder: field.placeholder,
+            kind: field.kind,
+            secret: Boolean(field.secret),
+            required: Boolean(field.required),
+            position: Number(field.position ?? 0)
+          })),
+          submitAction: deriveAuthSubmitActionFromControls(interactionContext?.controls ?? [])
+        }
+      };
+    }
+
+    const captureAuthViewerSnapshot = async ({ phase = "unknown" } = {}) => {
+      if (!this.page || typeof this.page.screenshot !== "function") {
+        return null;
+      }
+      try {
+        const image = await this.page.screenshot({
+          type: "png",
+          fullPage: false
+        });
+        const title = await this.page.title().catch(() => null);
+        return {
+          phase,
+          screenshotBase64: Buffer.from(image).toString("base64"),
+          url: this.page.url?.() ?? null,
+          title: typeof title === "string" ? title : null
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const runInPageAuthInputStage = async (stage = "fill-and-submit") =>
+      this.page
+      .evaluate(({ entries, stage }) => {
+        function normalize(value = "") {
+          return String(value ?? "").replace(/\s+/g, " ").trim();
+        }
+
+        function normalizeLower(value = "") {
+          return normalize(value).toLowerCase();
+        }
+
+        function isActionable(element, { editable = false } = {}) {
+          if (!element || !(element instanceof HTMLElement)) {
+            return false;
+          }
+          if (element.hasAttribute("hidden") || element.closest("[hidden]")) {
+            return false;
+          }
+          if (element.getAttribute("aria-hidden") === "true" || element.closest("[aria-hidden='true']")) {
+            return false;
+          }
+          if (element.matches(":disabled") || element.getAttribute("aria-disabled") === "true") {
+            return false;
+          }
+          if (
+            editable &&
+            ("readOnly" in element || element.getAttribute("aria-readonly")) &&
+            (element.readOnly || element.getAttribute("aria-readonly") === "true")
+          ) {
+            return false;
+          }
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.visibility === "collapse" ||
+            style.pointerEvents === "none" ||
+            Number.parseFloat(style.opacity || "1") <= 0.05 ||
+            rect.width <= 0 ||
+            rect.height <= 0
+          ) {
+            return false;
+          }
+          return true;
+        }
+
+        function firstActionable(selector) {
+          if (!selector) {
+            return null;
+          }
+          try {
+            return Array.from(document.querySelectorAll(selector)).find((element) => isActionable(element)) ?? null;
+          } catch {
+            return null;
+          }
+        }
+
+        function labelFor(element) {
+          return normalize(
+            element?.textContent ||
+              element?.getAttribute("aria-label") ||
+              element?.getAttribute("value") ||
+              element?.getAttribute("title") ||
+              ""
+          );
+        }
+
+        function formFromSelector(formSelector) {
+          if (!formSelector) {
+            return null;
+          }
+          try {
+            const candidate = document.querySelector(formSelector);
+            if (candidate instanceof HTMLFormElement) {
+              return candidate;
+            }
+            return candidate?.closest?.("form") ?? null;
+          } catch {
+            return null;
+          }
+        }
+
+        function fieldHaystack(field) {
+          const labels = field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement
+            ? Array.from(field.labels ?? [])
+                .map((label) => normalize(label?.textContent ?? ""))
+                .join(" ")
+            : "";
+          return normalizeLower(
+            [
+              labels,
+              field?.closest?.("label")?.textContent ?? "",
+              field?.getAttribute?.("aria-label") ?? "",
+              field?.getAttribute?.("placeholder") ?? "",
+              field?.getAttribute?.("name") ?? "",
+              field?.getAttribute?.("id") ?? "",
+              field?.getAttribute?.("autocomplete") ?? "",
+              field?.getAttribute?.("type") ?? ""
+            ].join(" ")
+          );
+        }
+
+        function kindMatches(field, kind = "") {
+          const normalizedKind = normalizeLower(kind);
+          const type = normalizeLower(field?.getAttribute?.("type") ?? "");
+          const haystack = fieldHaystack(field);
+          if (normalizedKind === "password") {
+            return type === "password";
+          }
+          if (normalizedKind === "otp") {
+            return (
+              normalizeLower(field?.getAttribute?.("autocomplete") ?? "").includes("one-time-code") ||
+              /\b(otp|verification|code)\b/.test(haystack)
+            );
+          }
+          if (normalizedKind === "email") {
+            return type === "email" || /\bemail\b/.test(haystack);
+          }
+          if (normalizedKind === "phone") {
+            return type === "tel" || /\b(phone|mobile)\b/.test(haystack);
+          }
+          if (normalizedKind === "search") {
+            return type === "search" || /\bsearch\b/.test(haystack);
+          }
+          if (normalizedKind === "date") {
+            return ["date", "datetime-local", "month", "week", "time"].includes(type);
+          }
+          return type !== "password";
+        }
+
+        function resolveField(entry = {}) {
+          const preferredForm = formFromSelector(entry.formSelector);
+          const selectors = [entry.primarySelector, entry.fallbackSelector].filter(Boolean);
+          for (const selector of selectors) {
+            try {
+              const candidates = Array.from(document.querySelectorAll(selector)).filter((candidate) =>
+                isActionable(candidate, { editable: true })
+              );
+              if (candidates.length === 0) {
+                continue;
+              }
+              if (preferredForm) {
+                const inForm = candidates.find((candidate) => {
+                  const form = candidate.form ?? candidate.closest?.("form");
+                  return form && form === preferredForm;
+                });
+                if (inForm) {
+                  return inForm;
+                }
+              }
+              const kindMatched = candidates.find((candidate) => kindMatches(candidate, entry.kind));
+              if (kindMatched) {
+                return kindMatched;
+              }
+              return candidates[0];
+            } catch {
+              // Ignore invalid selectors and continue with metadata matching.
+            }
+          }
+
+          const pool = preferredForm
+            ? Array.from(preferredForm.querySelectorAll("input, textarea"))
+            : Array.from(document.querySelectorAll("input, textarea"));
+          const keyHints = [
+            normalizeLower(entry.key ?? ""),
+            normalizeLower(entry.label ?? ""),
+            normalizeLower(entry.placeholder ?? "")
+          ].filter(Boolean);
+          const scored = [];
+
+          for (const field of pool) {
+            if (!isActionable(field, { editable: true })) {
+              continue;
+            }
+            let score = 0;
+            if (kindMatches(field, entry.kind)) {
+              score += 80;
+            }
+            const haystack = fieldHaystack(field);
+            for (const hint of keyHints) {
+              if (hint && haystack.includes(hint)) {
+                score += 30;
+              }
+            }
+            if (preferredForm) {
+              const form = field.form ?? field.closest?.("form");
+              if (form && form === preferredForm) {
+                score += 40;
+              }
+            }
+            if (score > 0) {
+              scored.push({ field, score });
+            }
+          }
+
+          scored.sort((left, right) => right.score - left.score);
+          return scored[0]?.field ?? null;
+        }
+
+        function valueSetterFor(field) {
+          if (field instanceof HTMLInputElement) {
+            return Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set ?? null;
+          }
+          if (field instanceof HTMLTextAreaElement) {
+            return Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set ?? null;
+          }
+          return null;
+        }
+
+        function writeValue(field, value) {
+          const typed = String(value ?? "");
+          if (!("value" in field)) {
+            return false;
+          }
+          try {
+            const setter = valueSetterFor(field);
+            if (typeof setter === "function") {
+              setter.call(field, "");
+              setter.call(field, typed);
+            } else {
+              field.value = "";
+              field.value = typed;
+            }
+            return true;
+          } catch {
+            try {
+              field.value = typed;
+              return true;
+            } catch {
+              return false;
+            }
+          }
+        }
+
+        function dispatchInputLifecycle(field, value) {
+          const typed = String(value ?? "");
+          try {
+            field.dispatchEvent(
+              new InputEvent("input", {
+                bubbles: true,
+                cancelable: true,
+                data: typed.length > 0 ? typed.slice(-1) : "",
+                inputType: "insertText"
+              })
+            );
+          } catch {
+            field.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+          }
+          field.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+        }
+
+        function fieldValueMatches(field, value) {
+          const expected = String(value ?? "");
+          const actual = String(field?.value ?? "");
+          return actual === expected;
+        }
+
+        function setValue(field, value) {
+          if (!field || !isActionable(field, { editable: true })) {
+            return {
+              resolved: false,
+              actionable: false,
+              fillAttempted: false,
+              focused: false,
+              filled: false,
+              verified: false,
+              valuePresentAfterFill: false,
+              valueLengthAfterFill: 0
+            };
+          }
+
+          let focused = false;
+          try {
+            field.focus();
+            focused = true;
+          } catch {
+            focused = false;
+          }
+
+          let filled = false;
+          let verified = false;
+          let valueLengthAfterFill = 0;
+          let valuePresentAfterFill = false;
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const wrote = writeValue(field, value);
+            filled = filled || wrote;
+            if (!wrote) {
+              continue;
+            }
+
+            dispatchInputLifecycle(field, value);
+            if (fieldValueMatches(field, value)) {
+              verified = true;
+              valueLengthAfterFill = String(field?.value ?? "").length;
+              valuePresentAfterFill = valueLengthAfterFill > 0;
+              break;
+            }
+
+            // Second deterministic fallback for controlled inputs that re-render on input.
+            if (attempt === 0) {
+              try {
+                if (typeof field.select === "function") {
+                  field.select();
+                }
+              } catch {
+                // Ignore.
+              }
+            }
+          }
+
+          try {
+            field.blur();
+          } catch {
+            // Ignore blur failures.
+          }
+
+          return {
+            resolved: true,
+            actionable: true,
+            fillAttempted: true,
+            focused,
+            filled,
+            verified,
+            valuePresentAfterFill,
+            valueLengthAfterFill
+          };
+        }
+
+        const submitCandidates = [
+          "button[type='submit']",
+          "input[type='submit']",
+          "button",
+          "input[type='button']",
+          "[role='button']",
+          "a[role='button']",
+          "a[href]"
+        ];
+        const submitKeywordPattern = /\b(sign in|log in|login|submit|verify|continue|next|confirm|allow)\b/i;
+
+        const fieldResults = [];
+        const filledElements = [];
+        const focusedFieldKeys = [];
+        let activeForm = null;
+        let fieldTargetsResolvedCount = 0;
+        let fieldTargetsFilledCount = 0;
+        let fieldTargetsVerifiedCount = 0;
+
+        for (const entry of entries) {
+          const element = resolveField(entry);
+          const result = setValue(element, entry.value);
+          if (result.resolved) {
+            fieldTargetsResolvedCount += 1;
+          }
+          if (result.filled) {
+            fieldTargetsFilledCount += 1;
+          }
+          if (result.verified) {
+            fieldTargetsVerifiedCount += 1;
+          }
+          if (result.focused) {
+            focusedFieldKeys.push(String(entry.key ?? ""));
+          }
+          fieldResults.push({
+            key: entry.key,
+            kind: entry.kind,
+            secret: Boolean(entry.secret),
+            actionable: result.actionable,
+            fillAttempted: result.fillAttempted,
+            resolved: result.resolved,
+            filled: result.filled,
+            verified: result.verified,
+            valuePresentAfterFill: result.valuePresentAfterFill,
+            valueLengthAfterFill: result.valueLengthAfterFill
+          });
+          if (result.verified && element) {
+            filledElements.push({
+              element,
+              kind: entry.kind
+            });
+            activeForm = activeForm ?? element.form ?? element.closest("form");
+          }
+        }
+
+        const identifierFilled = fieldResults.some(
+          (entry) => entry.verified && entry.kind !== "password" && entry.kind !== "otp"
+        );
+        const passwordFilled = fieldResults.some((entry) => entry.verified && entry.kind === "password");
+        const fillExecutionAttempted = entries.length > 0;
+        const fillExecutionSucceeded =
+          fieldResults.length > 0 &&
+          fieldResults.every((entry) => !entry.resolved || entry.verified);
+        const targetedPageUrl = window.location.href;
+        const targetedFrameUrl = window.location.href;
+        const targetedFrameType = "page";
+
+        if (
+          stage === "fill-only" &&
+          fieldResults.some((entry) => entry.verified)
+        ) {
+          return {
+            ok: true,
+            code: "INPUT_FIELDS_FILLED",
+            reason: "Input fields were entered and verified.",
+            inputFieldsConsumed: fillExecutionAttempted,
+            fillExecutionAttempted,
+            fillExecutionSucceeded,
+            fieldTargetsResolvedCount,
+            fieldTargetsFilledCount,
+            fieldTargetsVerifiedCount,
+            focusedFieldKeys,
+            identifierFilled,
+            usernameFilled: identifierFilled,
+            passwordFilled,
+            submitTriggered: false,
+            submitControlResolved: false,
+            submitControlType: "none",
+            submitControlDetected: false,
+            selectedControlLabel: null,
+            explicitInvalidCredentialErrorDetected: false,
+            fieldResults,
+            targetedPageUrl,
+            targetedFrameUrl,
+            targetedFrameType
+          };
+        }
+
+        if (!fieldResults.some((entry) => entry.verified)) {
+          return {
+            ok: false,
+            code: "AUTH_FILL_BLOCKED",
+            reason: "Detected input fields could not be filled for this step.",
+            inputFieldsConsumed: fillExecutionAttempted,
+            fillExecutionAttempted,
+            fillExecutionSucceeded: false,
+            fieldTargetsResolvedCount,
+            fieldTargetsFilledCount,
+            fieldTargetsVerifiedCount,
+            focusedFieldKeys,
+            identifierFilled: false,
+            usernameFilled: false,
+            passwordFilled: false,
+            submitTriggered: false,
+            submitControlResolved: false,
+            submitControlType: "none",
+            submitControlDetected: false,
+            selectedControlLabel: null,
+            explicitInvalidCredentialErrorDetected: false,
+            fieldResults,
+            targetedPageUrl,
+            targetedFrameUrl,
+            targetedFrameType
+          };
+        }
+
+        let submitTriggered = false;
+        let submitControlType = "none";
+        let selectedControlLabel = null;
+        let submitControlDetected = false;
+        let submitControlResolved = false;
+
+        if (activeForm) {
+          const formControls = [];
+          for (const selector of submitCandidates) {
+            formControls.push(...Array.from(activeForm.querySelectorAll(selector)));
+          }
+          const actionableControl = formControls.find(
+            (control) =>
+              isActionable(control) &&
+              (
+                String(control.getAttribute("type") || "").toLowerCase() === "submit" ||
+                submitKeywordPattern.test(labelFor(control))
+              )
+          );
+          if (actionableControl) {
+            submitControlDetected = true;
+            submitControlResolved = true;
+            actionableControl.click();
+            submitTriggered = true;
+            submitControlType = "control-click";
+            selectedControlLabel = labelFor(actionableControl) || "Submit";
+          }
+        }
+
+        if (!submitTriggered && activeForm) {
+          try {
+            if (typeof activeForm.requestSubmit === "function") {
+              activeForm.requestSubmit();
+            } else {
+              activeForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+            }
+            submitTriggered = true;
+            submitControlType = "form-submit";
+            selectedControlLabel = "form-submit";
+            submitControlDetected = true;
+            submitControlResolved = true;
+          } catch {
+            // Fall through.
+          }
+        }
+
+        if (!submitTriggered) {
+          const globalControl = submitCandidates
+            .map((selector) => firstActionable(selector))
+            .find(
+              (control) =>
+                control &&
+                (
+                  String(control.getAttribute("type") || "").toLowerCase() === "submit" ||
+                  submitKeywordPattern.test(labelFor(control))
+                )
+            );
+          if (globalControl) {
+            submitControlDetected = true;
+            submitControlResolved = true;
+            globalControl.click();
+            submitTriggered = true;
+            submitControlType = "control-click";
+            selectedControlLabel = labelFor(globalControl) || "Submit";
+          }
+        }
+
+        if (!submitTriggered && filledElements.length > 0) {
+          const activeField = filledElements[filledElements.length - 1].element;
+          activeField.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+          activeField.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
+          submitTriggered = true;
+          submitControlType = "keyboard-enter";
+          selectedControlLabel = "keyboard-enter";
+        }
+
+        const explicitInvalidCredentialErrorDetected = Array.from(
+          document.querySelectorAll(
+            [
+              "[role='alert']",
+              "[aria-live='assertive']",
+              ".error",
+              ".invalid-feedback",
+              "[data-error]",
+              "[class*='error' i]",
+              "[aria-invalid='true']"
+            ].join(",")
+          )
+        )
+          .filter((element) => isActionable(element))
+          .map((element) => labelFor(element).toLowerCase())
+          .some(
+            (text) =>
+              /\b(invalid|incorrect|wrong|does not match|failed|try again)\b/.test(text) &&
+              /\b(password|username|email|credential|sign in|log in|access key|account id|user id|login id|otp|verification)\b/.test(
+                text
+              )
+          );
+
+        return {
+          ok: submitTriggered,
+          code: submitTriggered ? "INPUT_FIELDS_SUBMITTED" : "AUTH_SUBMIT_CONTROL_MISSING",
+          reason: submitTriggered
+            ? "Input fields were entered and submission was triggered."
+            : "Input fields were entered, but no actionable submit control was found.",
+          inputFieldsConsumed: fillExecutionAttempted,
+          fillExecutionAttempted,
+          fillExecutionSucceeded,
+          fieldTargetsResolvedCount,
+          fieldTargetsFilledCount,
+          fieldTargetsVerifiedCount,
+          focusedFieldKeys,
+          identifierFilled,
+          usernameFilled: identifierFilled,
+          passwordFilled,
+          submitTriggered,
+          submitControlResolved,
+          submitControlType,
+          submitControlDetected,
+          selectedControlLabel,
+          explicitInvalidCredentialErrorDetected,
+          fieldResults,
+          targetedPageUrl,
+          targetedFrameUrl,
+          targetedFrameType
+        };
+      }, {
+        entries: orderedEntries,
+        stage
+      })
+      .catch(() => ({
+        ok: false,
+        code: "SUBMISSION_FAILED",
+        reason: "Input-field submission failed while interacting with the page.",
+        inputFieldsConsumed: true,
+        fillExecutionAttempted: true,
+        fillExecutionSucceeded: false,
+        fieldTargetsResolvedCount: 0,
+        fieldTargetsFilledCount: 0,
+        fieldTargetsVerifiedCount: 0,
+        focusedFieldKeys: [],
+        identifierFilled: false,
+        usernameFilled: false,
+        passwordFilled: false,
+        submitTriggered: false,
+        submitControlResolved: false,
+        submitControlType: "none",
+        submitControlDetected: false,
+        selectedControlLabel: null,
+        explicitInvalidCredentialErrorDetected: false,
+        fieldResults: [],
+        targetedPageUrl: this.page?.url?.() ?? null,
+        targetedFrameUrl: this.page?.url?.() ?? null,
+        targetedFrameType: "unknown"
+      }));
+
+    const fillPreview = await runInPageAuthInputStage("fill-only");
+    let viewerSnapshotAfterFill = null;
+    if (Number(fillPreview?.fieldTargetsVerifiedCount ?? 0) > 0) {
+      await this.page.waitForTimeout(140).catch(() => {});
+      viewerSnapshotAfterFill = await captureAuthViewerSnapshot({ phase: "after-fill" });
+    }
+
+    let submission = await runInPageAuthInputStage("fill-and-submit");
+
+    const shouldAttemptPlaywrightFallback =
+      orderedEntries.length > 0 &&
+      (
+        Number(submission?.fieldTargetsVerifiedCount ?? 0) < orderedEntries.length ||
+        submission?.code === "AUTH_FILL_BLOCKED"
+      );
+
+    if (shouldAttemptPlaywrightFallback) {
+      const alreadyVerifiedKeys = new Set(
+        (Array.isArray(submission?.fieldResults) ? submission.fieldResults : [])
+          .filter((entry) => entry?.verified)
+          .map((entry) => String(entry?.key ?? "").trim().toLowerCase())
+      );
+
+      let fallbackResolvedCount = 0;
+      let fallbackVerifiedCount = 0;
+      let fallbackIdentifierFilled = false;
+      let fallbackPasswordFilled = false;
+      const fallbackFocusedFieldKeys = [];
+      let fallbackSubmitTriggered = false;
+      let lastFilledLocator = null;
+      const fallbackFieldUpdates = new Map();
+      const mainFrame =
+        typeof this.page?.mainFrame === "function" ? this.page.mainFrame() : null;
+      let fallbackTargetedFrameUrl = submission?.targetedFrameUrl ?? null;
+      let fallbackTargetedFrameType = submission?.targetedFrameType ?? "unknown";
+
+      const isEditableLocator = async (locator) => {
+        const count = await locator.count().catch(() => 0);
+        if (!count) {
+          return false;
+        }
+        const visible = await locator.isVisible().catch(() => false);
+        if (!visible) {
+          return false;
+        }
+        const disabled = await locator.isDisabled().catch(() => false);
+        if (disabled) {
+          return false;
+        }
+        const readOnly = await locator
+          .evaluate(
+            (element) =>
+              (("readOnly" in element) && Boolean(element.readOnly)) ||
+              element.getAttribute?.("aria-readonly") === "true"
+          )
+          .catch(() => false);
+        return !readOnly;
+      };
+
+      const resolveEntryLocator = async (entry = {}) => {
+        const frameCandidates =
+          typeof this.page?.frames === "function"
+            ? this.page.frames().filter(Boolean)
+            : [];
+        const targets =
+          frameCandidates.length > 0
+            ? frameCandidates
+            : [mainFrame].filter(Boolean);
+        const normalizedTargets = targets.length > 0 ? targets : [this.page];
+        const selectors = [entry.primarySelector, entry.fallbackSelector].filter(Boolean);
+        for (const target of normalizedTargets) {
+          for (const selector of selectors) {
+            if (entry.formSelector) {
+              const scoped = target.locator(entry.formSelector).first().locator(selector).first();
+              if (await isEditableLocator(scoped)) {
+                return {
+                  locator: scoped,
+                  frame:
+                    target === this.page
+                      ? mainFrame
+                      : target
+                };
+              }
+            }
+
+            const direct = target.locator(selector).first();
+            if (await isEditableLocator(direct)) {
+              return {
+                locator: direct,
+                frame:
+                  target === this.page
+                    ? mainFrame
+                    : target
+              };
+            }
+          }
+        }
+        return null;
+      };
+
+      const verifyLocatorValue = async (locator, expectedValue) =>
+        locator
+          .evaluate(
+            (element, expected) => String(element?.value ?? "") === String(expected ?? ""),
+            String(expectedValue ?? "")
+          )
+          .catch(() => false);
+
+      for (const entry of orderedEntries) {
+        const key = String(entry?.key ?? "").trim().toLowerCase();
+        if (!key || alreadyVerifiedKeys.has(key)) {
+          continue;
+        }
+        const target = await resolveEntryLocator(entry);
+        if (!target?.locator) {
+          continue;
+        }
+        const locator = target.locator;
+        const frameRef = target.frame;
+        const frameUrl =
+          frameRef && typeof frameRef.url === "function"
+            ? frameRef.url()
+            : this.page?.url?.();
+        if (frameRef) {
+          const isMainFrame = Boolean(mainFrame && frameRef === mainFrame);
+          fallbackTargetedFrameType = isMainFrame ? "page" : "iframe";
+          if (!isMainFrame && frameUrl) {
+            fallbackTargetedFrameUrl = frameUrl;
+          } else if (frameUrl && !fallbackTargetedFrameUrl) {
+            fallbackTargetedFrameUrl = frameUrl;
+          }
+        } else if (fallbackTargetedFrameType === "unknown") {
+          fallbackTargetedFrameType = "page";
+          if (frameUrl && !fallbackTargetedFrameUrl) {
+            fallbackTargetedFrameUrl = frameUrl;
+          }
+        }
+
+        fallbackResolvedCount += 1;
+        await locator.focus().catch(() => {});
+        fallbackFocusedFieldKeys.push(key);
+        await locator.fill(String(entry?.value ?? "")).catch(() => {});
+        let verified = await verifyLocatorValue(locator, entry?.value);
+
+        if (!verified) {
+          await locator.click({ clickCount: 3 }).catch(() => {});
+          await this.page.keyboard.press("Control+A").catch(() => {});
+          await this.page.keyboard.press("Meta+A").catch(() => {});
+          await this.page.keyboard.type(String(entry?.value ?? ""), { delay: 20 }).catch(() => {});
+          verified = await verifyLocatorValue(locator, entry?.value);
+        }
+
+        if (verified) {
+          fallbackVerifiedCount += 1;
+          alreadyVerifiedKeys.add(key);
+          if (entry.kind === "password") {
+            fallbackPasswordFilled = true;
+          } else if (entry.kind !== "otp") {
+            fallbackIdentifierFilled = true;
+          }
+          lastFilledLocator = locator;
+        }
+        fallbackFieldUpdates.set(key, {
+          key,
+          kind: entry.kind,
+          secret: Boolean(entry.secret),
+          actionable: true,
+          fillAttempted: true,
+          resolved: true,
+          filled: verified,
+          verified,
+          valuePresentAfterFill: verified,
+          valueLengthAfterFill: verified ? String(entry?.value ?? "").length : 0
+        });
+      }
+
+      if (!submission?.submitTriggered && fallbackVerifiedCount > 0 && lastFilledLocator) {
+        await lastFilledLocator.focus().catch(() => {});
+        await lastFilledLocator.press("Enter").catch(() => {});
+        fallbackSubmitTriggered = true;
+      }
+
+      if (fallbackResolvedCount > 0 || fallbackSubmitTriggered) {
+        const mergedFocusedFieldKeys = Array.from(
+          new Set([...(Array.isArray(submission?.focusedFieldKeys) ? submission.focusedFieldKeys : []), ...fallbackFocusedFieldKeys])
+        );
+        const mergedFieldResults = [];
+        const baseFieldResults = Array.isArray(submission?.fieldResults) ? submission.fieldResults : [];
+        const existingByKey = new Map();
+        for (const fieldResult of baseFieldResults) {
+          const key = String(fieldResult?.key ?? "").trim().toLowerCase();
+          if (!key) {
+            continue;
+          }
+          existingByKey.set(key, {
+            key,
+            kind: fieldResult?.kind ?? null,
+            secret: Boolean(fieldResult?.secret),
+            actionable: Boolean(fieldResult?.actionable),
+            fillAttempted: Boolean(fieldResult?.fillAttempted),
+            resolved: Boolean(fieldResult?.resolved),
+            filled: Boolean(fieldResult?.filled),
+            verified: Boolean(fieldResult?.verified),
+            valuePresentAfterFill: Boolean(fieldResult?.valuePresentAfterFill),
+            valueLengthAfterFill: Number(fieldResult?.valueLengthAfterFill ?? 0)
+          });
+        }
+        for (const [key, update] of fallbackFieldUpdates.entries()) {
+          const current = existingByKey.get(key) ?? {
+            key,
+            kind: update.kind ?? null,
+            secret: Boolean(update.secret),
+            actionable: false,
+            fillAttempted: false,
+            resolved: false,
+            filled: false,
+            verified: false,
+            valuePresentAfterFill: false,
+            valueLengthAfterFill: 0
+          };
+          existingByKey.set(key, {
+            ...current,
+            kind: update.kind ?? current.kind,
+            secret: Boolean(update.secret ?? current.secret),
+            actionable: Boolean(current.actionable || update.actionable),
+            fillAttempted: Boolean(current.fillAttempted || update.fillAttempted),
+            resolved: Boolean(current.resolved || update.resolved),
+            filled: Boolean(current.filled || update.filled),
+            verified: Boolean(current.verified || update.verified),
+            valuePresentAfterFill: Boolean(current.valuePresentAfterFill || update.valuePresentAfterFill),
+            valueLengthAfterFill: Math.max(
+              Number(current.valueLengthAfterFill ?? 0),
+              Number(update.valueLengthAfterFill ?? 0)
+            )
+          });
+        }
+        for (const field of orderedEntries) {
+          const key = String(field?.key ?? "").trim().toLowerCase();
+          if (!key) {
+            continue;
+          }
+          if (!existingByKey.has(key)) {
+            existingByKey.set(key, {
+              key,
+              kind: field?.kind ?? null,
+              secret: Boolean(field?.secret),
+              actionable: false,
+              fillAttempted: false,
+              resolved: false,
+              filled: false,
+              verified: false,
+              valuePresentAfterFill: false,
+              valueLengthAfterFill: 0
+            });
+          }
+          mergedFieldResults.push(existingByKey.get(key));
+        }
+        const totalResolvedCount = Math.max(
+          Number(submission?.fieldTargetsResolvedCount ?? 0),
+          Number(submission?.fieldTargetsResolvedCount ?? 0) + fallbackResolvedCount
+        );
+        const totalFilledCount = Math.max(
+          Number(submission?.fieldTargetsFilledCount ?? 0),
+          Number(submission?.fieldTargetsFilledCount ?? 0) + fallbackVerifiedCount
+        );
+        const totalVerifiedCount = Math.max(
+          Number(submission?.fieldTargetsVerifiedCount ?? 0),
+          Number(submission?.fieldTargetsVerifiedCount ?? 0) + fallbackVerifiedCount
+        );
+
+        submission = {
+          ...submission,
+          ok: Boolean(submission?.ok || fallbackSubmitTriggered || submission?.submitTriggered),
+          code:
+            submission?.submitTriggered || fallbackSubmitTriggered
+              ? "INPUT_FIELDS_SUBMITTED"
+              : submission?.code,
+          reason:
+            submission?.submitTriggered || fallbackSubmitTriggered
+              ? "Input fields were entered and submission was triggered."
+              : submission?.reason,
+          inputFieldsConsumed: true,
+          fillExecutionAttempted: true,
+          fillExecutionSucceeded: totalVerifiedCount > 0,
+          fieldTargetsResolvedCount: totalResolvedCount,
+          fieldTargetsFilledCount: totalFilledCount,
+          fieldTargetsVerifiedCount: totalVerifiedCount,
+          focusedFieldKeys: mergedFocusedFieldKeys,
+          fieldResults: mergedFieldResults,
+          identifierFilled: Boolean(submission?.identifierFilled || fallbackIdentifierFilled),
+          usernameFilled: Boolean(submission?.usernameFilled || fallbackIdentifierFilled),
+          passwordFilled: Boolean(submission?.passwordFilled || fallbackPasswordFilled),
+          submitTriggered: Boolean(submission?.submitTriggered || fallbackSubmitTriggered),
+          submitControlResolved: Boolean(submission?.submitControlResolved || fallbackSubmitTriggered),
+          submitControlType:
+            submission?.submitTriggered
+              ? submission?.submitControlType ?? "none"
+              : fallbackSubmitTriggered
+                ? "keyboard-enter"
+                : submission?.submitControlType ?? "none",
+          targetedPageUrl: submission?.targetedPageUrl ?? this.page?.url?.() ?? null,
+          targetedFrameUrl: fallbackTargetedFrameUrl ?? submission?.targetedFrameUrl ?? this.page?.url?.() ?? null,
+          targetedFrameType: fallbackTargetedFrameType || submission?.targetedFrameType || "unknown"
+        };
+      }
+    }
+
+    let viewerSnapshotAfterSubmit = null;
+    if (Boolean(submission?.submitTriggered)) {
+      await this.page.waitForTimeout(140).catch(() => {});
+      viewerSnapshotAfterSubmit = await captureAuthViewerSnapshot({ phase: "after-submit" });
+    }
+
+    await this.settleAfterAuthSubmission();
+    const transitionedProbe = await this.waitForAuthTransition({
+      previousProbe,
+      submission
+    });
+    const submitSourceUrl = String(previousProbe?.pageUrl ?? "");
+    const transitionedUrl = String(transitionedProbe?.pageUrl ?? "");
+    const postSubmitUrlChanged =
+      submitSourceUrl.length > 0 &&
+      transitionedUrl.length > 0 &&
+      submitSourceUrl !== transitionedUrl;
+    const progression = detectAuthStepAdvance(previousProbe, transitionedProbe, {
+      ...submission,
+      submitTriggered: Boolean(submission?.submitTriggered)
+    });
+
+    return {
+      success: Boolean(submission?.ok),
+      code: submission?.code ?? "INPUT_FIELDS_SUBMITTED",
+      reason: submission?.reason ?? "Input fields were submitted.",
+      inputFieldsConsumed: Boolean(submission?.inputFieldsConsumed),
+      fillExecutionAttempted: Boolean(submission?.fillExecutionAttempted),
+      fillExecutionSucceeded: Boolean(submission?.fillExecutionSucceeded),
+      fieldTargetsResolvedCount: Number(submission?.fieldTargetsResolvedCount ?? 0),
+      fieldTargetsFilledCount: Number(submission?.fieldTargetsFilledCount ?? 0),
+      fieldTargetsVerifiedCount: Number(submission?.fieldTargetsVerifiedCount ?? 0),
+      focusedFieldKeys: Array.isArray(submission?.focusedFieldKeys) ? submission.focusedFieldKeys : [],
+      submitTriggered: Boolean(submission?.submitTriggered),
+      submitControlResolved: Boolean(submission?.submitControlResolved ?? submission?.submitControlDetected),
+      submitControlType: submission?.submitControlType ?? "none",
+      selectedControlLabel: submission?.selectedControlLabel ?? null,
+      stepAdvanced: progression.advanced,
+      stepAdvanceReason: progression.reason,
+      previousVisibleStep: progression.fromStep,
+      currentVisibleStep: progression.toStep,
+      explicitInvalidCredentialErrorDetected: Boolean(submission?.explicitInvalidCredentialErrorDetected),
+      identifierFilled: Boolean(submission?.identifierFilled ?? submission?.usernameFilled),
+      usernameFilled: Boolean(submission?.usernameFilled ?? submission?.identifierFilled),
+      passwordFilled: Boolean(submission?.passwordFilled),
+      browserActionExecuted: Boolean(
+        submission?.browserActionExecuted ||
+        Number(submission?.fieldTargetsVerifiedCount ?? 0) > 0 ||
+        submission?.identifierFilled ||
+        submission?.usernameFilled ||
+        submission?.passwordFilled
+      ),
+      postSubmitUrlChanged,
+      postSubmitUrl: transitionedUrl || null,
+      postSubmitProbeState: inferAuthVisibleStep(transitionedProbe),
+      targetedPageUrl: (submission?.targetedPageUrl ?? submitSourceUrl) || null,
+      targetedFrameUrl:
+        (submission?.targetedFrameUrl ?? submission?.targetedPageUrl ?? submitSourceUrl) || null,
+      targetedFrameType: submission?.targetedFrameType ?? "unknown",
+      perField: Array.isArray(submission?.fieldResults)
+        ? submission.fieldResults.map((fieldResult) => ({
+            key: String(fieldResult?.key ?? "").trim().toLowerCase(),
+            resolved: Boolean(fieldResult?.resolved),
+            actionable: Boolean(fieldResult?.actionable),
+            fillAttempted: Boolean(fieldResult?.fillAttempted),
+            filled: Boolean(fieldResult?.filled),
+            verified: Boolean(fieldResult?.verified),
+            valuePresentAfterFill: Boolean(fieldResult?.valuePresentAfterFill),
+            valueLengthAfterFill: Number(fieldResult?.valueLengthAfterFill ?? 0)
+          })).filter((fieldResult) => fieldResult.key)
+        : [],
+      viewerFrameCapturedAfterFill: Boolean(viewerSnapshotAfterFill?.screenshotBase64),
+      viewerFrameCapturedAfterSubmit: Boolean(viewerSnapshotAfterSubmit?.screenshotBase64),
+      viewerSnapshots: {
+        afterFill: viewerSnapshotAfterFill,
+        afterSubmit: viewerSnapshotAfterSubmit
+      },
+      authenticated: Boolean(transitionedProbe?.authenticatedHint || (await this.isAuthenticated())),
+      probe: transitionedProbe,
+      form: {
+        identifierFieldDetected: Boolean(transitionedProbe?.identifierFieldDetected || transitionedProbe?.usernameFieldDetected),
+        usernameFieldDetected: Boolean(transitionedProbe?.usernameFieldDetected || transitionedProbe?.identifierFieldDetected),
+        passwordFieldDetected: Boolean(transitionedProbe?.passwordFieldDetected),
+        otpFieldDetected: Boolean(transitionedProbe?.otpFieldDetected),
+        submitControlDetected: Boolean(submission?.submitControlDetected || transitionedProbe?.submitControlDetected),
+        visibleStep: transitionedProbe?.visibleStep ?? inferAuthVisibleStep(transitionedProbe),
+        identifierFieldVisibleCount: Number(
+          transitionedProbe?.identifierFieldVisibleCount ?? transitionedProbe?.usernameFieldVisibleCount ?? 0
+        ),
+        identifierLabelCandidates: Array.isArray(transitionedProbe?.identifierLabelCandidates)
+          ? transitionedProbe.identifierLabelCandidates.slice(0, 5)
+          : [],
+        usernameFieldVisibleCount: Number(transitionedProbe?.usernameFieldVisibleCount ?? 0),
+        passwordFieldVisibleCount: Number(transitionedProbe?.passwordFieldVisibleCount ?? 0),
+        inputFields: Array.isArray(transitionedProbe?.inputFields) ? transitionedProbe.inputFields : [],
+        submitAction: transitionedProbe?.submitAction ?? null
+      }
     };
   }
 
@@ -5814,6 +7964,7 @@ export class BrowserSession {
         const enrichedSubmission = {
           ...submission,
           postSubmitUrlChanged,
+          postSubmitUrl: transitionedUrl || null,
           postSubmitProbeState: inferAuthVisibleStep(transitionedProbe),
           browserActionExecuted: Boolean(submission?.usernameFilled || submission?.passwordFilled)
         };
@@ -5882,6 +8033,7 @@ export class BrowserSession {
       passwordFilled: false,
       identifierFilled: false,
       postSubmitUrlChanged: false,
+      postSubmitUrl: null,
       postSubmitProbeState: null,
       browserActionExecuted: false
     };
@@ -5929,6 +8081,7 @@ export class BrowserSession {
           ...forcedSubmission,
           postSubmitUrlChanged:
             submitSourceUrl.length > 0 && transitionedUrl.length > 0 && submitSourceUrl !== transitionedUrl,
+          postSubmitUrl: transitionedUrl || null,
           postSubmitProbeState: inferAuthVisibleStep(forcedProbe),
           browserActionExecuted: Boolean(
             forcedSubmission?.browserActionExecuted ||
@@ -5992,6 +8145,10 @@ export class BrowserSession {
       passwordFilled: Boolean(attempts.some((entry) => entry?.submission?.passwordFilled)),
       browserActionExecuted: Boolean(attempts.some((entry) => entry?.submission?.browserActionExecuted)),
       postSubmitUrlChanged: Boolean(attempts.some((entry) => entry?.submission?.postSubmitUrlChanged)),
+      postSubmitUrl:
+        latestSubmission.postSubmitUrl ??
+        probe?.pageUrl ??
+        null,
       postSubmitProbeState: inferAuthVisibleStep(probe),
       authenticated,
       probe,
@@ -6013,7 +8170,9 @@ export class BrowserSession {
           ? probe.identifierLabelCandidates.slice(0, 5)
           : [],
         usernameFieldVisibleCount: Number(probe.usernameFieldVisibleCount ?? 0),
-        passwordFieldVisibleCount: Number(probe.passwordFieldVisibleCount ?? 0)
+        passwordFieldVisibleCount: Number(probe.passwordFieldVisibleCount ?? 0),
+        inputFields: Array.isArray(probe?.inputFields) ? probe.inputFields : [],
+        submitAction: probe?.submitAction ?? null
       }
     };
   }
@@ -6236,16 +8395,22 @@ export class BrowserSession {
           .map((element) => normalize(element.textContent || element.getAttribute("aria-label") || ""))
           .some((text) => /\blog in\b|\bsign in\b|\bauthentication\b|\bverify\b/.test(text));
 
-        if (accountMarkerVisible) {
+        const loginIntentInBody =
+          /\blog in\b|\bsign in\b|\bauthentication\b|\bverify your identity\b|\bsecurity code\b/.test(body);
+        const strongLoginWall =
+          visiblePasswordField ||
+          visibleOtpField ||
+          (
+            visibleIdentifierField &&
+            (visibleSignInAction || visibleLoginHeading || loginIntentInBody || loginPath)
+          ) ||
+          (visibleSignInAction && (visibleLoginHeading || loginIntentInBody || loginPath));
+
+        if (accountMarkerVisible && !strongLoginWall) {
           return true;
         }
 
-        const strongLoginSignals =
-          visiblePasswordField ||
-          visibleOtpField ||
-          visibleIdentifierField ||
-          (visibleSignInAction && visibleLoginHeading);
-        if (strongLoginSignals) {
+        if (strongLoginWall) {
           return false;
         }
 
@@ -6272,6 +8437,14 @@ export class BrowserSession {
   }
 
   async close({ status = "passed" } = {}) {
+    const captureVideoMode = this.runConfig?.artifacts?.captureVideo ?? "fail-only";
+    const shouldRecordVideo =
+      captureVideoMode === "always" ||
+      (captureVideoMode === "fail-only" && this.isFunctionalMode());
+    const shouldKeepVideo =
+      captureVideoMode === "always" ||
+      (captureVideoMode === "fail-only" && status === "failed");
+
     if (this.traceStarted) {
       if (this.runConfig?.artifacts?.captureTraceOnFail && status === "failed") {
         await this.context?.tracing.stop({ path: this.tracePath }).catch(() => {});
@@ -6298,10 +8471,14 @@ export class BrowserSession {
       this.artifactIndex.trace = this.buildArtifactRef(this.tracePath);
     }
 
-    if (this.runConfig?.artifacts?.captureVideo === "always" && this.videoHandle) {
+    if (shouldRecordVideo && this.videoHandle) {
       const videoPath = await this.videoHandle.path().catch(() => null);
       if (videoPath && (await this.hasFile(videoPath))) {
-        this.appendArtifact("video", this.buildArtifactRef(videoPath));
+        if (shouldKeepVideo) {
+          this.appendArtifact("video", this.buildArtifactRef(videoPath));
+        } else {
+          await fs.unlink(videoPath).catch(() => {});
+        }
       }
     }
 

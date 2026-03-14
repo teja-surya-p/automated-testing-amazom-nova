@@ -1,10 +1,18 @@
 import { config } from "../../lib/config.js";
 import { nowIso, sleep } from "../../lib/utils.js";
+import { hasVisibleCredentialForm } from "../../library/common-tests/authFlowSignals.js";
+import { buildSnapshotEvidenceRefs } from "../../library/common-tests/evidenceRefs.js";
+import { buildAuthFormMetadata } from "../../library/auth-fields/index.js";
 import { canonicalizeUrl } from "../../library/url/urlFrontier.js";
 import { getBlockerResolutionHint, toFunctionalBlocker } from "./blockerTaxonomy.js";
 import { evaluateUploadCapability } from "./capabilityPolicy.js";
 import { FunctionalFlowGraph } from "./flowGraph.js";
 import { discoverFlowCandidates } from "./flowDiscovery.js";
+import {
+  filterFlowCandidatesBySelection,
+  resolveFunctionalCheckSelection
+} from "./checkSelection.js";
+import { buildFunctionalFormDocs, deriveFunctionalFormGroups } from "./formAssist.js";
 import { extractFormSemantics } from "./formSemantics.js";
 import { evaluateCoreFunctionalRules } from "./assertions/coreRules.js";
 import {
@@ -29,6 +37,123 @@ const FUNCTIONAL_BLOCKER_STATES = new Set([
 
 const AUTH_CHALLENGE_PATTERN =
   /2fa|two[- ]factor|verification code|otp|one[- ]time code|reset password|forgot password|security code/i;
+const AUTH_URL_PATTERN = /\/(login|sign[-_]?in|auth|verify|otp|two[-_]?factor)\b|accounts\.google\.com|auth0|okta|signin/i;
+const LOGOUT_URL_PATTERN = /\/(log(?:out|off)|sign(?:out|[-_]?out)|session[-_]?end|end[-_]?session)\b/i;
+const LOGOUT_ACTION_PATTERN =
+  /\blog\s*out\b|\blogout\b|\bsign\s*out\b|\bsignout\b|\bsign\s*off\b|\bsignoff\b|\bend\s*session\b|\bsession\s*end\b|\bleave\s*workspace\b|\bswitch\s*account\b/i;
+
+function snapshotShowsCredentialLoginWall(snapshot = {}) {
+  return hasVisibleCredentialForm(snapshot, {
+    allowTextLikeFieldFallback: false
+  });
+}
+
+function probeShowsAuthRequired(probe = {}) {
+  const visibleStep = String(probe?.visibleStep ?? "").trim().toLowerCase();
+  const credentialEvidence = probeHasCredentialEvidence(probe);
+  const loginWallStrength = String(probe?.loginWallStrength ?? "").trim().toLowerCase();
+  const strongLoginWallDetected = ["strong", "medium"].includes(loginWallStrength)
+    ? true
+    : Boolean(
+        probe?.loginWallDetected &&
+          (probe?.passwordFieldDetected ||
+            probe?.otpFieldDetected ||
+            probe?.otpChallengeDetected ||
+            probe?.submitControlDetected ||
+            visibleStep === "credentials" ||
+            visibleStep === "password")
+      );
+
+  if (!credentialEvidence && !probe?.otpChallengeDetected && !probe?.captchaDetected) {
+    return false;
+  }
+  if (visibleStep === "otp") {
+    return true;
+  }
+  if (visibleStep === "credentials" || visibleStep === "password") {
+    return true;
+  }
+  if (visibleStep === "username") {
+    return strongLoginWallDetected;
+  }
+  if (probe?.authenticatedHint && !strongLoginWallDetected) {
+    return false;
+  }
+  return Boolean(
+    probe?.otpChallengeDetected ||
+      probe?.otpFieldDetected ||
+      probe?.passwordFieldDetected ||
+      strongLoginWallDetected
+  );
+}
+
+function probeHasCredentialEvidence(probe = {}) {
+  const inputFields = Array.isArray(probe?.inputFields)
+    ? probe.inputFields.filter((field) => field && typeof field === "object")
+    : [];
+  return Boolean(
+    inputFields.length > 0 ||
+    probe?.identifierFieldDetected ||
+    probe?.usernameFieldDetected ||
+    probe?.passwordFieldDetected ||
+    probe?.otpFieldDetected ||
+    probe?.otpChallengeDetected ||
+    Number(probe?.identifierFieldVisibleCount ?? probe?.usernameFieldVisibleCount ?? 0) > 0 ||
+    Number(probe?.passwordFieldVisibleCount ?? 0) > 0 ||
+    Number(probe?.otpFieldVisibleCount ?? 0) > 0
+  );
+}
+
+function isLogoutLikeAction(action = {}) {
+  const haystack = [
+    action?.functionalKind ?? "",
+    action?.type ?? "",
+    action?.label ?? "",
+    action?.selector ?? "",
+    action?.href ?? ""
+  ]
+    .join(" ")
+    .trim();
+  if (!haystack) {
+    return false;
+  }
+  if (String(action?.functionalKind ?? "").trim().toLowerCase() === "logout") {
+    return true;
+  }
+  return LOGOUT_ACTION_PATTERN.test(haystack);
+}
+
+function isLikelyAuthUrl(url = "") {
+  return AUTH_URL_PATTERN.test(String(url ?? ""));
+}
+
+function isLikelyLogoutUrl(url = "") {
+  return LOGOUT_URL_PATTERN.test(String(url ?? ""));
+}
+
+function isHttpUrl(url = "") {
+  return /^https?:/i.test(String(url ?? "").trim());
+}
+
+function resolveFunctionalFlowEntryUrl(candidates = []) {
+  const urls = (Array.isArray(candidates) ? candidates : [])
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => isHttpUrl(value));
+
+  for (const url of urls) {
+    if (!isLikelyAuthUrl(url) && !isLikelyLogoutUrl(url)) {
+      return url;
+    }
+  }
+
+  for (const url of urls) {
+    if (!isLikelyLogoutUrl(url)) {
+      return url;
+    }
+  }
+
+  return urls[0] ?? "";
+}
 
 function createRunStoppedError(message = "Run stop requested by user.") {
   const error = new Error(message);
@@ -62,18 +187,7 @@ function worstSeverity(left = null, right = null) {
 }
 
 function buildEvidenceRefs(snapshot) {
-  const refs = [{ type: "screenshot", ref: snapshot.screenshotUrl ?? snapshot.screenshotPath }];
-  const domArtifacts = snapshot.artifacts?.dom ?? [];
-  const a11yArtifacts = snapshot.artifacts?.a11y ?? [];
-  const dom = domArtifacts.at(-1);
-  const a11y = a11yArtifacts.at(-1);
-  if (dom?.url) {
-    refs.push({ type: "dom", ref: dom.url });
-  }
-  if (a11y?.url) {
-    refs.push({ type: "a11y", ref: a11y.url });
-  }
-  return refs;
+  return buildSnapshotEvidenceRefs(snapshot);
 }
 
 function safeCanonical(url) {
@@ -335,6 +449,124 @@ function finalizeContractSummary(accumulator, runConfig = {}, issues = []) {
   };
 }
 
+const REQUIRED_VERIFICATION_CONFIDENCE = 1;
+const ASSIST_POLL_INTERVAL_MS = Math.max(500, Number(config.loginAssistPollMs ?? 3000));
+
+function createFunctionalDocsAccumulator(startUrl = "") {
+  return {
+    pages: new Map(),
+    forms: new Map(),
+    verificationPrompts: 0,
+    verificationOverrides: 0,
+    startUrl: startUrl || ""
+  };
+}
+
+function observeFunctionalDocsSnapshot(accumulator, snapshot = {}) {
+  if (!snapshot?.url) {
+    return;
+  }
+  const canonicalUrl = safeCanonical(snapshot.url);
+  const current = accumulator.pages.get(canonicalUrl) ?? {
+    url: snapshot.url,
+    canonicalUrl,
+    title: snapshot.title ?? "",
+    visits: 0,
+    hasInputFields: false,
+    hasCredentialForm: false,
+    hasSearchBar: false,
+    hasMainLandmark: false,
+    mainActionHints: []
+  };
+  current.visits += 1;
+  current.title = snapshot.title ?? current.title;
+  current.hasInputFields = current.hasInputFields || (snapshot.formControls ?? []).length > 0;
+  current.hasCredentialForm = current.hasCredentialForm || hasVisibleCredentialForm(snapshot, {
+    allowTextLikeFieldFallback: false
+  });
+  current.hasSearchBar = current.hasSearchBar || Boolean(snapshot.hasSearchBar);
+  current.hasMainLandmark = current.hasMainLandmark || Boolean(snapshot.hasMainLandmark);
+  current.mainActionHints = [...new Set([
+    ...current.mainActionHints,
+    ...(snapshot.interactive ?? [])
+      .filter((entry) => entry?.inViewport && !entry?.disabled && entry?.zone === "Primary Content")
+      .slice(0, 4)
+      .map((entry) => entry.text || entry.ariaLabel || entry.placeholder || entry.name || entry.tag)
+      .filter(Boolean)
+  ])].slice(0, 8);
+  accumulator.pages.set(canonicalUrl, current);
+}
+
+function observeFunctionalDocsForms(accumulator, groups = []) {
+  for (const group of groups) {
+    if (!group?.groupId) {
+      continue;
+    }
+    if (!accumulator.forms.has(group.groupId)) {
+      accumulator.forms.set(group.groupId, group);
+    }
+  }
+}
+
+function formatWebsiteDocumentation({
+  session,
+  flows = [],
+  issues = [],
+  blockers = [],
+  loginAssist = {},
+  contractSummary = {},
+  docsAccumulator
+}) {
+  const pages = [...docsAccumulator.pages.values()].sort((left, right) =>
+    String(left.canonicalUrl).localeCompare(String(right.canonicalUrl))
+  );
+  const forms = buildFunctionalFormDocs([...docsAccumulator.forms.values()]);
+  const mode = session?.runConfig?.testMode ?? "functional";
+
+  const markdown = [
+    "# Functional Website Documentation",
+    "",
+    `- Start URL: ${session?.startUrl ?? docsAccumulator.startUrl ?? "-"}`,
+    `- Mode: ${mode}`,
+    `- Pages observed: ${pages.length}`,
+    `- Forms detected: ${forms.length}`,
+    `- Flows executed: ${flows.length}`,
+    `- Functional issues: ${issues.length}`,
+    `- Functional blockers: ${blockers.length}`,
+    `- Verification prompts (confidence < 1.0): ${docsAccumulator.verificationPrompts}`,
+    `- Verification overrides by user: ${docsAccumulator.verificationOverrides}`,
+    `- Login assist attempted: ${loginAssist?.attempted ? "yes" : "no"}`,
+    `- API calls observed: ${contractSummary?.apiCallsObserved ?? 0}`,
+    "",
+    "## Pages",
+    ...(pages.length
+      ? pages.map((page) =>
+          `- ${page.url} | visits=${page.visits} | inputs=${page.hasInputFields ? "yes" : "no"} | credential-form=${page.hasCredentialForm ? "yes" : "no"} | search=${page.hasSearchBar ? "yes" : "no"} | main-landmark=${page.hasMainLandmark ? "yes" : "no"}`
+        )
+      : ["- No pages observed."]),
+    "",
+    "## Forms",
+    ...(forms.length
+      ? forms.map((form) => `- ${form.purpose}: ${form.description} (${form.fieldCount} fields)`)
+      : ["- No form groups detected during this run."]),
+    "",
+    "## Contracts",
+    `- API 4xx: ${contractSummary?.apiErrorCounts?.["4xx"] ?? 0}`,
+    `- API 5xx: ${contractSummary?.apiErrorCounts?.["5xx"] ?? 0}`,
+    `- API timeouts: ${contractSummary?.apiErrorCounts?.timeouts ?? 0}`,
+    `- GraphQL error steps: ${contractSummary?.stepsWithGraphqlErrors ?? 0}`
+  ].join("\n");
+
+  return {
+    generatedAt: nowIso(),
+    pages,
+    forms,
+    verificationPrompts: docsAccumulator.verificationPrompts,
+    verificationOverrides: docsAccumulator.verificationOverrides,
+    markdown
+  };
+}
+
 export function aggregateFunctionalRunnerResult({
   flows = [],
   issues = [],
@@ -342,7 +574,8 @@ export function aggregateFunctionalRunnerResult({
   blockerTimeline = [],
   resumePoints = [],
   loginAssist = null,
-  contractSummary = null
+  contractSummary = null,
+  websiteDocumentation = null
 }) {
   const blockersSorted = [...blockers].sort((left, right) => (left.step ?? 0) - (right.step ?? 0));
   const issuesSorted = [...issues].sort((left, right) => {
@@ -407,7 +640,8 @@ export function aggregateFunctionalRunnerResult({
         endpointAllowlistPatterns: [],
         endpointBlocklistPatterns: []
       }
-    }
+    },
+    websiteDocumentation
   };
 }
 
@@ -466,6 +700,7 @@ export class FunctionalRunner {
     step,
     flow,
     action,
+    initialProbe = null,
     shouldStop = null
   }) {
     throwIfRunStopped(shouldStop);
@@ -486,6 +721,127 @@ export class FunctionalRunner {
       }
       return derived;
     };
+    const toAuthForm = (probe = null, currentForm = null, runtimeMeta = null) =>
+      buildAuthFormMetadata({
+        probe,
+        currentForm,
+        runtimeMeta
+      });
+    const toAuthRuntime = (probe = null, currentRuntime = null, overrides = {}) => ({
+      ...(currentRuntime ?? {}),
+      authClassificationReason:
+        overrides.authClassificationReason ??
+        probe?.authClassificationReason ??
+        probe?.reason ??
+        currentRuntime?.authClassificationReason ??
+        null,
+      loginWallStrength:
+        overrides.loginWallStrength ??
+        probe?.loginWallStrength ??
+        currentRuntime?.loginWallStrength ??
+        "none",
+      authenticatedSignalStrength:
+        overrides.authenticatedSignalStrength ??
+        probe?.authenticatedSignalStrength ??
+        currentRuntime?.authenticatedSignalStrength ??
+        "weak",
+      currentFunctionalPhase:
+        overrides.currentFunctionalPhase ??
+        currentRuntime?.currentFunctionalPhase ??
+        "pre_auth",
+      authenticatedConfirmedAt:
+        overrides.authenticatedConfirmedAt ??
+        currentRuntime?.authenticatedConfirmedAt ??
+        null,
+      resumedFromAuth:
+        overrides.resumedFromAuth ??
+        currentRuntime?.resumedFromAuth ??
+        false,
+      logoutScheduled:
+        overrides.logoutScheduled ??
+        currentRuntime?.logoutScheduled ??
+        false,
+      logoutExecuted:
+        overrides.logoutExecuted ??
+        currentRuntime?.logoutExecuted ??
+        false,
+      whyAuthRegressed:
+        overrides.whyAuthRegressed ??
+        currentRuntime?.whyAuthRegressed ??
+        null,
+      whyLogoutBlocked:
+        overrides.whyLogoutBlocked ??
+        currentRuntime?.whyLogoutBlocked ??
+        null
+    });
+    const emptyProbe = {
+      visibleStep: "unknown",
+      identifierFieldDetected: false,
+      usernameFieldDetected: false,
+      passwordFieldDetected: false,
+      otpFieldDetected: false,
+      submitControlDetected: false
+    };
+    const bootstrapProbe =
+      initialProbe ??
+      (await browserSession.collectAuthFormProbe().catch(() => null)) ??
+      emptyProbe;
+    if (!probeShowsAuthRequired(bootstrapProbe) || !probeHasCredentialEvidence(bootstrapProbe)) {
+      const resumedAt = nowIso();
+      sessionStore.patchSession(sessionId, {
+        status: "running",
+        loginAssist: {
+          state: "NOT_REQUIRED",
+          domain,
+          timeoutMs,
+          resumeStrategy,
+          endedAt: resumedAt
+        },
+        authAssist: {
+          state: "running",
+          code: "AUTH_NOT_REQUIRED",
+          reason: "No login wall detected from live auth probe; continuing flow.",
+          site: bootstrapProbe.site || domain,
+          pageUrl:
+            bootstrapProbe.pageUrl ||
+            browserSession.page?.url?.() ||
+            session.currentUrl ||
+            session.startUrl,
+          loginRequired: false,
+          form: toAuthForm(bootstrapProbe),
+          startedAt: resumedAt,
+          timeoutMs,
+          remainingMs: 0,
+          endedAt: resumedAt,
+          profileTag: runConfig.profileTag ?? "",
+          source: "probe",
+          runtime: toAuthRuntime(bootstrapProbe, null, {
+            currentFunctionalPhase: "authenticated",
+            authenticatedConfirmedAt: resumedAt,
+            resumedFromAuth: true
+          }),
+          updatedAt: resumedAt
+        }
+      });
+      sessionStore.appendAgentActivity?.(sessionId, {
+        phase: "auth",
+        kind: "login-assist",
+        status: "done",
+        message: "Login-assist bypassed because no credential wall evidence was detected.",
+        details: {
+          flowId: flow?.flowId ?? null,
+          step: step ?? null
+        }
+      });
+      emitSessionUpdate?.();
+      return {
+        status: "resumed",
+        code: "LOGIN_ASSIST_NOT_REQUIRED",
+        rationale: "No credential wall evidence detected.",
+        snapshot: null,
+        resumeStrategy
+      };
+    }
 
     sessionStore.patchSession(sessionId, {
       status: "login-assist",
@@ -502,19 +858,20 @@ export class FunctionalRunner {
         code: "LOGIN_REQUIRED",
         reason: "Authentication required before functional flows can continue.",
         site: domain,
-        pageUrl: browserSession.page?.url?.() ?? session.currentUrl ?? session.startUrl,
+        pageUrl: bootstrapProbe.pageUrl || browserSession.page?.url?.() || session.currentUrl || session.startUrl,
         loginRequired: true,
-        form: {
-          usernameFieldDetected: false,
-          passwordFieldDetected: false,
-          otpFieldDetected: false,
-          submitControlDetected: false
-        },
+        form: toAuthForm(bootstrapProbe),
         startedAt: nowIso(),
         timeoutMs,
         remainingMs: timeoutMs,
         profileTag: runConfig.profileTag ?? "",
         source: "probe",
+        runtime: toAuthRuntime(bootstrapProbe, null, {
+          currentFunctionalPhase: "pre_auth",
+          resumedFromAuth: false,
+          logoutScheduled: false,
+          logoutExecuted: false
+        }),
         updatedAt: nowIso()
       },
       runSummary: {
@@ -533,6 +890,18 @@ export class FunctionalRunner {
       type: "functional-login-assist",
       message: "Authentication required. Awaiting credentials/OTP via dashboard or manual browser completion."
     });
+    sessionStore.appendAgentActivity?.(sessionId, {
+      phase: "auth",
+      kind: "login-assist",
+      status: "doing",
+      message: "Login page detected. Waiting for authentication input fields.",
+      details: {
+        flowId: flow?.flowId ?? null,
+        step: step ?? null,
+        reason: "Protected flow requires authentication before continuing.",
+        nextAction: "Await input fields or OTP"
+      }
+    });
     emitSessionUpdate?.();
 
     while (true) {
@@ -550,6 +919,29 @@ export class FunctionalRunner {
           type: "functional-login-assist",
           message: "Resume check requested; validating authentication state."
         });
+        sessionStore.appendAgentActivity?.(sessionId, {
+          phase: "resume",
+          kind: "auth-resume-check",
+          status: "doing",
+          message: "Resume requested. Validating whether session is authenticated.",
+          details: {
+            flowId: flow?.flowId ?? null,
+            step: step ?? null
+          }
+        });
+        if (currentAuthAssist && typeof currentAuthAssist === "object") {
+          sessionStore.patchSession(sessionId, {
+            authAssist: {
+              runtime: {
+                ...(currentAuthAssist.runtime ?? {}),
+                resumeLoopAwakened: true,
+                resumeLoopConsumedFields: Boolean(
+                  currentAuthAssist.runtime?.inputFieldsConsumed ?? currentAuthAssist.submitAttempted
+                )
+              }
+            }
+          });
+        }
       }
 
       if (!forceResumeCheck) {
@@ -594,6 +986,15 @@ export class FunctionalRunner {
           message: "Login assist skipped by user."
         });
         emitSessionUpdate?.();
+        sessionStore.appendAgentActivity?.(sessionId, {
+          phase: "auth",
+          kind: "login-assist",
+          status: "blocked",
+          message: "Login assist was skipped by user; flow remains blocked.",
+          details: {
+            code: "LOGIN_SKIPPED"
+          }
+        });
         return {
           status: "blocked",
           code: "LOGIN_SKIPPED",
@@ -635,12 +1036,12 @@ export class FunctionalRunner {
             site: probe.site || domain,
             pageUrl: probe.pageUrl || session.startUrl,
             loginRequired: false,
-            form: {
-              usernameFieldDetected: Boolean(probe.usernameFieldDetected),
-              passwordFieldDetected: Boolean(probe.passwordFieldDetected),
-              otpFieldDetected: Boolean(probe.otpFieldDetected),
-              submitControlDetected: Boolean(probe.submitControlDetected)
-            },
+            form: toAuthForm(probe, latestAuthAssist?.form ?? null),
+            runtime: toAuthRuntime(probe, latestAuthAssist?.runtime ?? null, {
+              currentFunctionalPhase: "authenticated",
+              authenticatedConfirmedAt: nowIso(),
+              resumedFromAuth: true
+            }),
             startedAt: latestAuthAssist?.startedAt ?? nowIso(),
             timeoutMs,
             remainingMs: 0,
@@ -651,6 +1052,17 @@ export class FunctionalRunner {
           }
         });
         emitSessionUpdate?.();
+        sessionStore.appendAgentActivity?.(sessionId, {
+          phase: "resume",
+          kind: "auth-resume",
+          status: "done",
+          message: "Authentication validated. Resuming functionality flow.",
+          details: {
+            flowId: flow?.flowId ?? null,
+            step: step ?? null,
+            authState: "resumed"
+          }
+        });
         return {
           status: "resumed",
           code: "LOGIN_ASSIST_AUTH_VALIDATED",
@@ -705,12 +1117,15 @@ export class FunctionalRunner {
           site: probe.site || domain,
           pageUrl: probe.pageUrl || sessionStore.getSession(sessionId)?.currentUrl || session.startUrl,
           loginRequired: true,
-          form: {
-            usernameFieldDetected: Boolean(probe.usernameFieldDetected),
-            passwordFieldDetected: Boolean(probe.passwordFieldDetected),
-            otpFieldDetected: Boolean(probe.otpFieldDetected),
-            submitControlDetected: Boolean(probe.submitControlDetected)
-          },
+          form: toAuthForm(probe, latestAuthAssist?.form ?? null),
+          runtime: toAuthRuntime(probe, latestAuthAssist?.runtime ?? null, {
+            currentFunctionalPhase: "pre_auth",
+            resumedFromAuth: false,
+            whyAuthRegressed:
+              ["authenticated", "resumed"].includes(String(latestAuthAssist?.state ?? "").trim().toLowerCase())
+                ? "auth_wall_reappeared_after_authenticated_state"
+                : (latestAuthAssist?.runtime?.whyAuthRegressed ?? null)
+          }),
           startedAt: sessionStore.getSession(sessionId)?.authAssist?.startedAt ?? nowIso(),
           timeoutMs,
           remainingMs: Math.max(timeoutMs - elapsedMs, 0),
@@ -751,12 +1166,12 @@ export class FunctionalRunner {
             site: probe.site || domain,
             pageUrl: probe.pageUrl || session.startUrl,
             loginRequired: false,
-            form: {
-              usernameFieldDetected: Boolean(probe.usernameFieldDetected),
-              passwordFieldDetected: Boolean(probe.passwordFieldDetected),
-              otpFieldDetected: Boolean(probe.otpFieldDetected),
-              submitControlDetected: Boolean(probe.submitControlDetected)
-            },
+            form: toAuthForm(probe, sessionStore.getSession(sessionId)?.authAssist?.form ?? null),
+            runtime: toAuthRuntime(probe, sessionStore.getSession(sessionId)?.authAssist?.runtime ?? null, {
+              currentFunctionalPhase: "authenticated",
+              authenticatedConfirmedAt: nowIso(),
+              resumedFromAuth: true
+            }),
             startedAt: sessionStore.getSession(sessionId)?.authAssist?.startedAt ?? nowIso(),
             timeoutMs,
             remainingMs: 0,
@@ -767,6 +1182,17 @@ export class FunctionalRunner {
           }
         });
         emitSessionUpdate?.();
+        sessionStore.appendAgentActivity?.(sessionId, {
+          phase: "resume",
+          kind: "auth-resume",
+          status: "done",
+          message: "Authentication validated. Resuming functionality flow.",
+          details: {
+            flowId: flow?.flowId ?? null,
+            step: step ?? null,
+            authState: "resumed"
+          }
+        });
         return {
           status: "resumed",
           code: decision.code,
@@ -793,12 +1219,7 @@ export class FunctionalRunner {
             site: probe.site || domain,
             pageUrl: probe.pageUrl || session.startUrl,
             loginRequired: true,
-            form: {
-              usernameFieldDetected: Boolean(probe.usernameFieldDetected),
-              passwordFieldDetected: Boolean(probe.passwordFieldDetected),
-              otpFieldDetected: Boolean(probe.otpFieldDetected),
-              submitControlDetected: Boolean(probe.submitControlDetected)
-            },
+            form: toAuthForm(probe, sessionStore.getSession(sessionId)?.authAssist?.form ?? null),
             startedAt: sessionStore.getSession(sessionId)?.authAssist?.startedAt ?? nowIso(),
             timeoutMs,
             remainingMs: 0,
@@ -809,6 +1230,15 @@ export class FunctionalRunner {
           }
         });
         emitSessionUpdate?.();
+        sessionStore.appendAgentActivity?.(sessionId, {
+          phase: "auth",
+          kind: "timeout",
+          status: "failed",
+          message: "Login assist timed out before authentication could be validated.",
+          details: {
+            code: decision.code
+          }
+        });
         return {
           status: "timeout",
           code: decision.code,
@@ -835,12 +1265,7 @@ export class FunctionalRunner {
             site: probe.site || domain,
             pageUrl: probe.pageUrl || session.startUrl,
             loginRequired: true,
-            form: {
-              usernameFieldDetected: Boolean(probe.usernameFieldDetected),
-              passwordFieldDetected: Boolean(probe.passwordFieldDetected),
-              otpFieldDetected: Boolean(probe.otpFieldDetected),
-              submitControlDetected: Boolean(probe.submitControlDetected)
-            },
+            form: toAuthForm(probe, sessionStore.getSession(sessionId)?.authAssist?.form ?? null),
             startedAt: sessionStore.getSession(sessionId)?.authAssist?.startedAt ?? nowIso(),
             timeoutMs,
             remainingMs: Math.max(timeoutMs - elapsedMs, 0),
@@ -851,6 +1276,15 @@ export class FunctionalRunner {
           }
         });
         emitSessionUpdate?.();
+        sessionStore.appendAgentActivity?.(sessionId, {
+          phase: "auth",
+          kind: "blocked",
+          status: "failed",
+          message: decision.reason,
+          details: {
+            code: decision.code
+          }
+        });
         return {
           status: "blocked",
           code: decision.code,
@@ -860,6 +1294,509 @@ export class FunctionalRunner {
         };
       }
     }
+  }
+
+  async waitForFormAssist({
+    session,
+    sessionId,
+    browserSession,
+    sessionStore,
+    emitSessionUpdate,
+    snapshot,
+    step,
+    flow,
+    shouldStop = null
+  }) {
+    throwIfRunStopped(shouldStop);
+    const groups = deriveFunctionalFormGroups(snapshot);
+    if (!groups.length) {
+      return {
+        status: "not-required",
+        snapshot
+      };
+    }
+
+    const startedAt = nowIso();
+    const formAssistState = {
+      state: "awaiting_user",
+      pageUrl: snapshot.url,
+      step,
+      flowId: flow?.flowId ?? null,
+      reason: "Input fields detected. User decision is required for submit/skip/auto handling.",
+      groups,
+      decisions: {},
+      globalAction: null,
+      pendingGroupIds: groups.map((group) => group.groupId),
+      history: [],
+      startedAt,
+      endedAt: null,
+      updatedAt: startedAt
+    };
+
+    sessionStore.patchSession(sessionId, {
+      status: "form-assist",
+      formAssist: formAssistState,
+      currentUrl: snapshot.url,
+      currentStep: step,
+      frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
+      artifactIndex: browserSession.getArtifactIndex()
+    });
+    sessionStore.appendTimeline?.(sessionId, {
+      type: "functional-form-assist",
+      message: `Detected ${groups.length} form group(s); awaiting dashboard decision.`
+    });
+    emitSessionUpdate?.();
+
+    const timeoutMs = Math.max(60_000, Number(session?.runConfig?.functional?.formAssist?.timeoutMs ?? 900_000));
+    const startedAtMs = Date.now();
+
+    while (true) {
+      throwIfRunStopped(shouldStop);
+      const latest = sessionStore.getSession(sessionId);
+      const assist = latest?.formAssist ?? null;
+      if (!assist || assist.state === "resolved") {
+        return {
+          status: "resolved",
+          snapshot
+        };
+      }
+
+      const globalAction = String(assist.globalAction ?? "").toLowerCase();
+      const providedDecisions = assist.decisions ?? {};
+      const resolvedDecisions = {
+        ...providedDecisions
+      };
+
+      if (globalAction === "skip-all" || globalAction === "auto-all") {
+        const action = globalAction === "skip-all" ? "skip" : "auto";
+        for (const group of groups) {
+          if (resolvedDecisions[group.groupId]) {
+            continue;
+          }
+          resolvedDecisions[group.groupId] = {
+            action,
+            values: {},
+            description: group.description ?? "",
+            reason: `Applied global action ${globalAction}.`,
+            decidedAt: nowIso()
+          };
+        }
+      }
+
+      const allDecided = groups.every((group) => Boolean(resolvedDecisions[group.groupId]));
+      if (!allDecided) {
+        if (Date.now() - startedAtMs > timeoutMs) {
+          sessionStore.patchSession(sessionId, {
+            status: "running",
+            formAssist: {
+              ...assist,
+              state: "timed_out",
+              endedAt: nowIso(),
+              updatedAt: nowIso()
+            }
+          });
+          emitSessionUpdate?.();
+          return {
+            status: "timeout",
+            code: "FORM_ASSIST_TIMEOUT",
+            rationale: "Form assist timed out before all form groups received decisions.",
+            snapshot
+          };
+        }
+        await sleep(ASSIST_POLL_INTERVAL_MS);
+        continue;
+      }
+
+      sessionStore.patchSession(sessionId, {
+        formAssist: {
+          ...assist,
+          state: "processing",
+          decisions: resolvedDecisions,
+          pendingGroupIds: [],
+          updatedAt: nowIso()
+        }
+      });
+      emitSessionUpdate?.();
+
+      let latestSnapshot = snapshot;
+      const history = [];
+      for (const group of groups) {
+        throwIfRunStopped(shouldStop);
+        const decision = resolvedDecisions[group.groupId];
+        const normalizedAction = String(decision?.action ?? "skip").toLowerCase();
+        if (normalizedAction === "skip") {
+          history.push({
+            groupId: group.groupId,
+            action: "skip",
+            at: nowIso()
+          });
+          sessionStore.appendTimeline?.(sessionId, {
+            type: "functional-form-assist",
+            message: `Skipped form group ${group.groupId}.`
+          });
+          continue;
+        }
+
+        const submission = await browserSession.submitFormAssistGroup(group, {
+          action: normalizedAction === "auto" ? "auto" : "submit",
+          values: decision?.values ?? {},
+          description: decision?.description ?? group.description ?? "",
+          submitSelector: group.submitSelector ?? null,
+          submitLabel: group.submitLabel ?? null
+        });
+        history.push({
+          groupId: group.groupId,
+          action: normalizedAction === "auto" ? "auto" : "submit",
+          at: nowIso(),
+          submitTriggered: Boolean(submission?.submitTriggered),
+          fieldResults: submission?.fieldResults ?? []
+        });
+
+        latestSnapshot = await browserSession.capture(
+          `functional-form-assist-${group.groupId}-${step}`,
+          {
+            includeUiuxSignals: false,
+            includeFocusProbe: false
+          }
+        );
+      }
+
+      const resolvedAssist = sessionStore.getSession(sessionId)?.formAssist ?? assist;
+      sessionStore.patchSession(sessionId, {
+        status: "running",
+        currentUrl: latestSnapshot.url,
+        currentStep: step,
+        frame: `data:image/png;base64,${latestSnapshot.screenshotBase64}`,
+        artifactIndex: browserSession.getArtifactIndex(),
+        formAssist: {
+          ...resolvedAssist,
+          state: "resolved",
+          decisions: resolvedDecisions,
+          pendingGroupIds: [],
+          history: [...(resolvedAssist.history ?? []), ...history].slice(-50),
+          endedAt: nowIso(),
+          updatedAt: nowIso()
+        }
+      });
+      emitSessionUpdate?.();
+      return {
+        status: "resolved",
+        snapshot: latestSnapshot,
+        groups,
+        decisions: resolvedDecisions
+      };
+    }
+  }
+
+  async waitForVerificationAssist({
+    sessionId,
+    sessionStore,
+    emitSessionUpdate,
+    snapshot,
+    step,
+    flow,
+    assertionResults = [],
+    shouldStop = null
+  }) {
+    const uncertainAssertions = assertionResults.filter(
+      (assertion) => Number(assertion?.confidence ?? 0) < REQUIRED_VERIFICATION_CONFIDENCE
+    );
+    if (!uncertainAssertions.length) {
+      return {
+        resolvedAssertions: assertionResults,
+        prompted: 0,
+        overrides: 0,
+        timedOut: false
+      };
+    }
+
+    const prompts = uncertainAssertions.map((assertion, index) => {
+      const safeRuleId =
+        String(assertion.ruleId ?? "rule")
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 64) || "rule";
+      return {
+        promptId: `verify_${step}_${index + 1}_${safeRuleId}`,
+      assertionIndex: assertionResults.findIndex((entry) => entry === assertion),
+      ruleId: assertion.ruleId ?? "UNKNOWN_RULE",
+      expected: assertion.expected ?? "",
+      actual: assertion.actual ?? "",
+      confidence: Number(assertion.confidence ?? 0),
+      severity: assertion.severity ?? "P2",
+      proposedPass: Boolean(assertion.pass),
+      evidenceRefs: assertion.evidenceRefs ?? []
+      };
+    });
+
+    const startedAt = nowIso();
+    sessionStore.patchSession(sessionId, {
+      status: "verification-assist",
+      verificationAssist: {
+        state: "awaiting_user",
+        pageUrl: snapshot.url,
+        step,
+        flowId: flow?.flowId ?? null,
+        reason: "Verification confidence is below 100%; user confirmation is required.",
+        prompts,
+        decisions: {},
+        globalDecision: null,
+        pendingPromptIds: prompts.map((prompt) => prompt.promptId),
+        startedAt,
+        endedAt: null,
+        updatedAt: startedAt
+      }
+    });
+    sessionStore.appendTimeline?.(sessionId, {
+      type: "functional-verification-assist",
+      message: `Awaiting confirmation for ${prompts.length} verification result(s).`
+    });
+    emitSessionUpdate?.();
+
+    const timeoutMs = Math.max(60_000, Number(sessionStore.getSession(sessionId)?.runConfig?.functional?.verification?.timeoutMs ?? 900_000));
+    const startedAtMs = Date.now();
+
+    while (true) {
+      throwIfRunStopped(shouldStop);
+      const latest = sessionStore.getSession(sessionId);
+      const assist = latest?.verificationAssist ?? null;
+      if (!assist || assist.state === "resolved") {
+        return {
+          resolvedAssertions: assertionResults,
+          prompted: prompts.length,
+          overrides: 0,
+          timedOut: false
+        };
+      }
+
+      const globalDecision = String(assist.globalDecision ?? "").toLowerCase();
+      const decisions = {
+        ...(assist.decisions ?? {})
+      };
+      if (["accept-agent", "override-pass", "override-fail"].includes(globalDecision)) {
+        for (const prompt of prompts) {
+          if (!decisions[prompt.promptId]) {
+            decisions[prompt.promptId] = {
+              decision: globalDecision,
+              decidedAt: nowIso()
+            };
+          }
+        }
+      }
+
+      const allDecided = prompts.every((prompt) => Boolean(decisions[prompt.promptId]));
+      if (!allDecided) {
+        if (Date.now() - startedAtMs > timeoutMs) {
+          sessionStore.patchSession(sessionId, {
+            status: "running",
+            verificationAssist: {
+              ...assist,
+              state: "timed_out",
+              endedAt: nowIso(),
+              updatedAt: nowIso()
+            }
+          });
+          emitSessionUpdate?.();
+          return {
+            resolvedAssertions: assertionResults,
+            prompted: prompts.length,
+            overrides: 0,
+            timedOut: true
+          };
+        }
+        await sleep(ASSIST_POLL_INTERVAL_MS);
+        continue;
+      }
+
+      const promptByIndex = new Map(prompts.map((prompt) => [prompt.assertionIndex, prompt]));
+      const resolvedAssertions = assertionResults.map((assertion, index) => {
+        const prompt = promptByIndex.get(index);
+        if (!prompt || !prompt.promptId) {
+          return assertion;
+        }
+        const decisionEntry = decisions[prompt.promptId] ?? {
+          decision: "accept-agent"
+        };
+        const decision = String(decisionEntry.decision ?? "accept-agent").toLowerCase();
+        if (decision === "override-pass") {
+          return {
+            ...assertion,
+            pass: true,
+            confidence: 1,
+            actual: `${assertion.actual} [User override: PASS]`
+          };
+        }
+        if (decision === "override-fail") {
+          return {
+            ...assertion,
+            pass: false,
+            confidence: 1,
+            actual: `${assertion.actual} [User override: FAIL]`,
+            severity: assertion.severity ?? "P2"
+          };
+        }
+        return {
+          ...assertion,
+          confidence: 1
+        };
+      });
+
+      const overrideCount = Object.values(decisions).filter((entry) =>
+        ["override-pass", "override-fail"].includes(String(entry?.decision ?? "").toLowerCase())
+      ).length;
+      sessionStore.patchSession(sessionId, {
+        status: "running",
+        verificationAssist: {
+          ...assist,
+          state: "resolved",
+          decisions,
+          pendingPromptIds: [],
+          endedAt: nowIso(),
+          updatedAt: nowIso()
+        }
+      });
+      emitSessionUpdate?.();
+      return {
+        resolvedAssertions,
+        prompted: prompts.length,
+        overrides: overrideCount,
+        timedOut: false
+      };
+    }
+  }
+
+  async runFinalLogoutStage({
+    session,
+    sessionId,
+    runConfig,
+    browserSession,
+    sessionStore,
+    snapshot,
+    step,
+    shouldStop = null
+  }) {
+    throwIfRunStopped(shouldStop);
+    sessionStore.appendAgentActivity?.(sessionId, {
+      phase: "auth",
+      kind: "logout-stage",
+      status: "planned",
+      message: "About to execute final logout stage.",
+      details: {
+        step: step ?? null,
+        reason: "Final logout validation is scheduled after authenticated checks."
+      }
+    });
+    const logoutControl = (snapshot?.interactive ?? [])
+      .filter((item) => item?.inViewport && !item?.disabled)
+      .find((item) =>
+        /logout|log out|sign out|signout/i.test(
+          [item?.text, item?.ariaLabel, item?.placeholder, item?.name, item?.href].join(" ")
+        )
+      );
+
+    if (!logoutControl) {
+      sessionStore.appendAgentActivity?.(sessionId, {
+        phase: "auth",
+        kind: "logout-stage",
+        status: "blocked",
+        message: "Final logout stage skipped because no visible logout control was detected.",
+        details: {
+          step: step ?? null
+        }
+      });
+      return {
+        status: "skipped",
+        reason: "No visible logout control was detected for final-stage logout validation.",
+        beforeSnapshot: snapshot,
+        afterSnapshot: snapshot,
+        actionResult: null
+      };
+    }
+
+    const logoutAction = {
+      type: "click",
+      elementId: logoutControl.elementId,
+      functionalKind: "logout",
+      selector: logoutControl.selector ?? null,
+      label: logoutControl.text || logoutControl.ariaLabel || logoutControl.name || "Logout"
+    };
+    const safetyDecision = this.safetyPolicy.evaluateBeforeAction({
+      runConfig,
+      actionPlan: actionPlanFromAction(logoutAction),
+      snapshot,
+      currentUrl: snapshot?.url ?? session?.currentUrl ?? session?.startUrl
+    });
+    if (!safetyDecision.allowed) {
+      sessionStore.appendAgentActivity?.(sessionId, {
+        phase: "safety",
+        kind: "logout-stage",
+        status: "blocked",
+        message: "Final logout action was blocked by safety policy.",
+        details: {
+          step: step ?? null,
+          code: safetyDecision.code
+        }
+      });
+      return {
+        status: "skipped",
+        reason: `Final-stage logout validation was skipped by safety policy (${safetyDecision.code}).`,
+        beforeSnapshot: snapshot,
+        afterSnapshot: snapshot,
+        actionResult: null
+      };
+    }
+
+    const actionResult = await browserSession.executeAction(logoutAction, snapshot);
+    const afterSnapshot = await browserSession.capture(`functional-logout-final-${step}`, {
+      includeUiuxSignals: false,
+      includeFocusProbe: false
+    });
+    const probe = await browserSession.collectAuthFormProbe().catch(() => null);
+    const authenticated = await browserSession.isAuthenticated().catch(() => false);
+
+    const loggedOutByProbe = Boolean(
+      probe?.loginWallDetected ||
+      probe?.otpChallengeDetected ||
+      probe?.identifierFieldDetected ||
+      probe?.usernameFieldDetected ||
+      probe?.passwordFieldDetected
+    );
+    const loggedOutByContent = /login|sign in|session expired|authentication required/i.test(
+      String(afterSnapshot?.bodyText ?? "")
+    );
+    const loggedOut = !authenticated && (loggedOutByProbe || loggedOutByContent || isLikelyAuthUrl(afterSnapshot?.url));
+    sessionStore.appendAgentActivity?.(sessionId, {
+      phase: "auth",
+      kind: "logout-stage",
+      status: loggedOut ? "done" : "failed",
+      message: loggedOut
+        ? "Final logout stage confirmed authenticated session ended."
+        : "Logout action executed but authenticated indicators still appear present.",
+      details: {
+        step: step ?? null,
+        actionLabel: logoutAction.label,
+        postUrl: afterSnapshot?.url ?? null,
+        authenticatedAfterAction: Boolean(authenticated)
+      }
+    });
+
+    sessionStore.patchSession(sessionId, {
+      currentUrl: afterSnapshot.url,
+      currentStep: step,
+      frame: `data:image/png;base64,${afterSnapshot.screenshotBase64}`,
+      artifactIndex: browserSession.getArtifactIndex()
+    });
+
+    return {
+      status: loggedOut ? "passed" : "failed",
+      reason: loggedOut
+        ? "Final-stage logout validation confirmed session ended."
+        : "Logout action executed but session still appears authenticated.",
+      beforeSnapshot: snapshot,
+      afterSnapshot,
+      actionResult
+    };
   }
 
   async run({
@@ -878,6 +1815,7 @@ export class FunctionalRunner {
     const graph = new FunctionalFlowGraph();
     const assertionsConfig = runConfig.functional.assertions ?? {};
     const contractsConfig = runConfig.functional.contracts ?? {};
+    const checkSelection = resolveFunctionalCheckSelection(runConfig.functional?.checkIds ?? []);
     const runHistory = [];
     const blockers = [];
     const blockerTimeline = [];
@@ -885,6 +1823,7 @@ export class FunctionalRunner {
     const flowResults = [];
     const functionalIssues = [];
     const contractAccumulator = createContractAccumulator();
+    const docsAccumulator = createFunctionalDocsAccumulator(session.startUrl);
     const loginAssistSummary = {
       attempted: false,
       success: false,
@@ -899,6 +1838,8 @@ export class FunctionalRunner {
       includeFocusProbe: false
     });
     captureContractSnapshot(contractAccumulator, snapshot);
+    observeFunctionalDocsSnapshot(docsAccumulator, snapshot);
+    observeFunctionalDocsForms(docsAccumulator, deriveFunctionalFormGroups(snapshot));
     let currentSemantics = extractFormSemantics(snapshot);
     graph.addSnapshot(snapshot);
     runHistory.push({ step: stepCounter, url: snapshot.url });
@@ -908,24 +1849,53 @@ export class FunctionalRunner {
       frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
       artifactIndex: browserSession.getArtifactIndex()
     });
+    let flowEntryUrl =
+      resolveFunctionalFlowEntryUrl([
+        sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+        sessionStore.getSession(sessionId)?.loginAssist?.resumeTargetUrl,
+        snapshot.url,
+        session.currentUrl,
+        session.startUrl
+      ]) || session.startUrl;
 
     const initialGate = await this.gatekeeper.classify({
       goal: session.goal,
       snapshot,
       unchangedSteps: 0
     });
+    let initialAuthProbe = await browserSession.collectAuthFormProbe().catch(() => null);
+    const initialProbeAuthRequired = Boolean(
+      initialAuthProbe &&
+      probeHasCredentialEvidence(initialAuthProbe) &&
+      probeShowsAuthRequired(initialAuthProbe)
+    );
+    const initialSnapshotAuthRequired = Boolean(
+      !initialAuthProbe &&
+      snapshotShowsCredentialLoginWall(snapshot)
+    );
+    if (initialProbeAuthRequired) {
+      initialGate.pageState = "LOGIN_REQUIRED";
+      initialGate.rationale =
+        "Authentication wall detected from live auth probe. Awaiting dashboard credential/OTP assistance before functional flow continues.";
+    } else if (initialSnapshotAuthRequired) {
+      initialGate.pageState = "LOGIN_REQUIRED";
+      initialGate.rationale =
+        "Visible credential form detected. Awaiting dashboard credential/OTP assistance before functional flow continues.";
+    } else if (initialGate.pageState === "LOGIN_REQUIRED" && initialAuthProbe) {
+      initialGate.pageState = "READY";
+      initialGate.rationale =
+        "Gatekeeper reported login-required, but live auth probe found no credential wall evidence.";
+    }
     if (initialGate.pageState === "LOGIN_REQUIRED") {
       const loginAssistEnabled = runConfig.functional?.loginAssist?.enabled !== false;
-      if (!loginAssistEnabled || config.headless) {
+      if (!loginAssistEnabled) {
         this.appendFunctionalBlocker({
           blockers,
           blockerTimeline,
           blocker: {
-            type: loginAssistEnabled ? "LOGIN_ASSIST_HEADLESS_UNSUPPORTED" : "LOGIN_ASSIST_DISABLED",
+            type: "LOGIN_ASSIST_DISABLED",
             confidence: 0.92,
-            rationale: loginAssistEnabled
-              ? "Manual login assist requires PLAYWRIGHT_HEADLESS=false."
-              : "Login assist is disabled for this functional run.",
+            rationale: "Login assist is disabled for this functional run.",
             flowId: null,
             step: stepCounter
           },
@@ -945,6 +1915,7 @@ export class FunctionalRunner {
           step: stepCounter,
           flow: null,
           action: null,
+          initialProbe: initialAuthProbe,
           shouldStop
         });
 
@@ -960,12 +1931,24 @@ export class FunctionalRunner {
             timestamp: nowIso()
           });
           if (assistResult.resumeStrategy === "restart-flow") {
-            await browserSession.goto(session.startUrl);
+            const restartTargetUrl =
+              resolveFunctionalFlowEntryUrl([
+                sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+                sessionStore.getSession(sessionId)?.loginAssist?.resumeTargetUrl,
+                assistResult.snapshot?.url,
+                snapshot.url,
+                flowEntryUrl,
+                session.startUrl
+              ]) || session.startUrl;
+            flowEntryUrl = restartTargetUrl;
+            await browserSession.goto(restartTargetUrl);
             snapshot = await browserSession.capture("functional-login-assist-initial-reset", {
               includeUiuxSignals: false,
               includeFocusProbe: false
             });
             captureContractSnapshot(contractAccumulator, snapshot);
+            observeFunctionalDocsSnapshot(docsAccumulator, snapshot);
+            observeFunctionalDocsForms(docsAccumulator, deriveFunctionalFormGroups(snapshot));
             currentSemantics = extractFormSemantics(snapshot);
             runHistory.push({ step: stepCounter, url: snapshot.url });
             sessionStore.patchSession(sessionId, {
@@ -974,10 +1957,24 @@ export class FunctionalRunner {
               frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
               artifactIndex: browserSession.getArtifactIndex()
             });
+            flowEntryUrl =
+              resolveFunctionalFlowEntryUrl([
+                sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+                snapshot.url,
+                flowEntryUrl,
+                session.startUrl
+              ]) || flowEntryUrl;
           } else {
             snapshot = assistResult.snapshot ?? snapshot;
             currentSemantics = extractFormSemantics(snapshot);
             runHistory.push({ step: stepCounter, url: snapshot.url });
+            flowEntryUrl =
+              resolveFunctionalFlowEntryUrl([
+                sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+                snapshot.url,
+                flowEntryUrl,
+                session.startUrl
+              ]) || flowEntryUrl;
           }
         } else {
           if (assistResult.status === "timeout") {
@@ -1016,11 +2013,59 @@ export class FunctionalRunner {
       });
     }
 
-    const flows = discoverFlowCandidates({
+    if (!blockers.length) {
+      const initialFormAssist = await this.waitForFormAssist({
+        session,
+        sessionId,
+        browserSession,
+        sessionStore,
+        emitSessionUpdate,
+        snapshot,
+        step: stepCounter,
+        flow: null,
+        shouldStop
+      });
+
+      if (initialFormAssist.status === "timeout") {
+        this.appendFunctionalBlocker({
+          blockers,
+          blockerTimeline,
+          blocker: {
+            type: initialFormAssist.code ?? "FORM_ASSIST_TIMEOUT",
+            confidence: 0.94,
+            rationale: initialFormAssist.rationale ?? "Form assist timed out.",
+            flowId: null,
+            step: stepCounter
+          },
+          step: stepCounter,
+          action: "form-assist",
+          url: snapshot.url
+        });
+      } else if (initialFormAssist.snapshot) {
+        snapshot = initialFormAssist.snapshot;
+        captureContractSnapshot(contractAccumulator, snapshot);
+        observeFunctionalDocsSnapshot(docsAccumulator, snapshot);
+        observeFunctionalDocsForms(docsAccumulator, deriveFunctionalFormGroups(snapshot));
+        currentSemantics = extractFormSemantics(snapshot);
+        runHistory.push({ step: stepCounter, url: snapshot.url });
+        sessionStore.patchSession(sessionId, {
+          currentUrl: snapshot.url,
+          currentStep: stepCounter,
+          frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
+          artifactIndex: browserSession.getArtifactIndex()
+        });
+      }
+    }
+
+    const discoveredFlows = discoverFlowCandidates({
       snapshot,
       runConfig,
       formSemantics: currentSemantics
     }).slice(0, runConfig.functional.maxFlows);
+    const flows = filterFlowCandidatesBySelection(discoveredFlows, checkSelection);
+    const shouldRunFinalLogoutStage = checkSelection.selectionActive
+      ? checkSelection.selectedCheckIds.includes("LOGOUT_ENDS_SESSION")
+      : false;
     const flowRestartCounts = new Map();
 
     for (let flowIndex = 0; flowIndex < flows.length; ) {
@@ -1064,13 +2109,23 @@ export class FunctionalRunner {
         break;
       }
 
-      if (snapshot.url !== session.startUrl) {
-        await browserSession.goto(session.startUrl);
+      flowEntryUrl =
+        resolveFunctionalFlowEntryUrl([
+          sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+          sessionStore.getSession(sessionId)?.loginAssist?.resumeTargetUrl,
+          flowEntryUrl,
+          snapshot.url,
+          session.startUrl
+        ]) || flowEntryUrl;
+      if (flowEntryUrl && snapshot.url !== flowEntryUrl) {
+        await browserSession.goto(flowEntryUrl);
         snapshot = await browserSession.capture(`functional-flow-reset-${flow.flowId}`, {
           includeUiuxSignals: false,
           includeFocusProbe: false
         });
         captureContractSnapshot(contractAccumulator, snapshot);
+        observeFunctionalDocsSnapshot(docsAccumulator, snapshot);
+        observeFunctionalDocsForms(docsAccumulator, deriveFunctionalFormGroups(snapshot));
         currentSemantics = extractFormSemantics(snapshot);
         graph.addSnapshot(snapshot);
         runHistory.push({ step: stepCounter, url: snapshot.url });
@@ -1080,6 +2135,13 @@ export class FunctionalRunner {
           frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
           artifactIndex: browserSession.getArtifactIndex()
         });
+        flowEntryUrl =
+          resolveFunctionalFlowEntryUrl([
+            sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+            snapshot.url,
+            flowEntryUrl,
+            session.startUrl
+          ]) || flowEntryUrl;
       }
 
       const flowBaselineSnapshot = snapshot;
@@ -1105,6 +2167,65 @@ export class FunctionalRunner {
           selector: action.selector ?? null,
           expected: `Flow step ${stepCounter} (${action.functionalKind ?? action.type}) should execute safely and satisfy assertions.`
         });
+        sessionStore.appendAgentActivity?.(sessionId, {
+          phase: "flow-selection",
+          kind: "next-action",
+          status: "planned",
+          message: `About to execute ${action.functionalKind ?? action.type} action "${action.label ?? action.type}".`,
+          details: {
+            flowId: flow.flowId,
+            step: stepCounter,
+            actionType: action.type,
+            selector: action.selector ?? null,
+            reason: "Next deterministic step in selected functionality flow."
+          }
+        });
+
+        if (isLogoutLikeAction(action)) {
+          sessionStore.appendTimeline?.(sessionId, {
+            type: "functional-logout-guard",
+            message: "Logout/sign-out action was blocked during authenticated exploration and deferred to final logout stage."
+          });
+          sessionStore.appendAgentActivity?.(sessionId, {
+            phase: "safety",
+            kind: "logout-guard",
+            status: "blocked",
+            message: "Blocked potential logout/sign-out action during normal exploration.",
+            details: {
+              flowId: flow.flowId,
+              step: stepCounter,
+              actionLabel: action.label ?? null,
+              selector: action.selector ?? null,
+              reason: "reserved_for_final_logout_stage"
+            }
+          });
+          const currentAuthAssist = sessionStore.getSession(sessionId)?.authAssist ?? null;
+          if (currentAuthAssist && typeof currentAuthAssist === "object") {
+            sessionStore.patchSession(sessionId, {
+              authAssist: {
+                ...currentAuthAssist,
+                runtime: {
+                  ...(currentAuthAssist.runtime ?? {}),
+                  logoutScheduled: shouldRunFinalLogoutStage,
+                  logoutExecuted: false,
+                  whyLogoutBlocked: "reserved_for_final_logout_stage",
+                  currentFunctionalPhase: "authenticated"
+                }
+              }
+            });
+          }
+          completeFunctionalTestCase(testCaseTracker, flowStepCase, {
+            status: "skipped",
+            severity: "P3",
+            actual: "Logout actions are deferred until the explicit final logout stage.",
+            selector: action.selector ?? null,
+            pageUrl: snapshot.url,
+            canonicalUrl: safeCanonical(snapshot.url),
+            deviceLabel: snapshot.viewportLabel ?? "desktop",
+            evidenceRefs: stepEvidenceBeforeAction
+          });
+          continue;
+        }
 
         const safetyDecision = this.safetyPolicy.evaluateBeforeAction({
           runConfig,
@@ -1113,6 +2234,18 @@ export class FunctionalRunner {
           currentUrl: snapshot.url
         });
         if (!safetyDecision.allowed) {
+          sessionStore.appendAgentActivity?.(sessionId, {
+            phase: "safety",
+            kind: "action-blocked",
+            status: "blocked",
+            message: `Blocked action "${action.label ?? action.type}" by safety policy.`,
+            details: {
+              flowId: flow.flowId,
+              step: stepCounter,
+              code: safetyDecision.code,
+              reason: safetyDecision.reason
+            }
+          });
           this.appendFunctionalBlocker({
             blockers,
             blockerTimeline,
@@ -1219,6 +2352,8 @@ export class FunctionalRunner {
             includeFocusProbe: false
           });
           captureContractSnapshot(contractAccumulator, nextSnapshot);
+          observeFunctionalDocsSnapshot(docsAccumulator, nextSnapshot);
+          observeFunctionalDocsForms(docsAccumulator, deriveFunctionalFormGroups(nextSnapshot));
         } catch (error) {
           if (/UPLOAD_REQUIRED/i.test(error?.message ?? "")) {
             this.appendFunctionalBlocker({
@@ -1372,6 +2507,29 @@ export class FunctionalRunner {
           snapshot: nextSnapshot,
           unchangedSteps: 0
         });
+        let gateAuthProbe = await browserSession.collectAuthFormProbe().catch(() => null);
+        const gateProbeAuthRequired = Boolean(
+          gateAuthProbe &&
+          probeHasCredentialEvidence(gateAuthProbe) &&
+          probeShowsAuthRequired(gateAuthProbe)
+        );
+        const gateSnapshotAuthRequired = Boolean(
+          !gateAuthProbe &&
+          snapshotShowsCredentialLoginWall(nextSnapshot)
+        );
+        if (gateProbeAuthRequired) {
+          gate.pageState = "LOGIN_REQUIRED";
+          gate.rationale =
+            "Authentication wall detected from live auth probe. Awaiting dashboard credentials/OTP before flow continuation.";
+        } else if (gateSnapshotAuthRequired) {
+          gate.pageState = "LOGIN_REQUIRED";
+          gate.rationale =
+            "Visible credential form detected. Awaiting dashboard credential/OTP assistance before functional flow continues.";
+        } else if (gate.pageState === "LOGIN_REQUIRED" && gateAuthProbe) {
+          gate.pageState = "READY";
+          gate.rationale =
+            "Gatekeeper reported login-required, but live auth probe found no credential wall evidence.";
+        }
         if (gate.pageState === "CONSENT_REQUIRED") {
           const consentTarget = (nextSnapshot.interactive ?? [])
             .filter((item) => !item.disabled && item.inViewport)
@@ -1401,6 +2559,8 @@ export class FunctionalRunner {
                 includeFocusProbe: false
               });
               captureContractSnapshot(contractAccumulator, nextSnapshot);
+              observeFunctionalDocsSnapshot(docsAccumulator, nextSnapshot);
+              observeFunctionalDocsForms(docsAccumulator, deriveFunctionalFormGroups(nextSnapshot));
               this.appendFunctionalEvent({
                 blockerTimeline,
                 step: stepCounter,
@@ -1466,7 +2626,7 @@ export class FunctionalRunner {
         const authChallengeDetected = AUTH_CHALLENGE_PATTERN.test(nextSnapshot.bodyText ?? "");
         if (authChallengeDetected) {
           const loginAssistEnabled = runConfig.functional?.loginAssist?.enabled !== false;
-          if (loginAssistEnabled && !config.headless) {
+          if (loginAssistEnabled) {
             gate.pageState = "LOGIN_REQUIRED";
             gate.rationale =
               "Authentication challenge detected (password reset, verification code, or 2FA). Awaiting dashboard credentials/OTP.";
@@ -1509,16 +2669,14 @@ export class FunctionalRunner {
         }
         if (gate.pageState === "LOGIN_REQUIRED") {
           const loginAssistEnabled = runConfig.functional?.loginAssist?.enabled !== false;
-          if (!loginAssistEnabled || config.headless) {
+          if (!loginAssistEnabled) {
             this.appendFunctionalBlocker({
               blockers,
               blockerTimeline,
               blocker: {
-                type: loginAssistEnabled ? "LOGIN_ASSIST_HEADLESS_UNSUPPORTED" : "LOGIN_ASSIST_DISABLED",
+                type: "LOGIN_ASSIST_DISABLED",
                 confidence: 0.9,
-                rationale: loginAssistEnabled
-                  ? "Manual login assist requires PLAYWRIGHT_HEADLESS=false."
-                  : "Login assist is disabled for this functional run.",
+                rationale: "Login assist is disabled for this functional run.",
                 flowId: flow.flowId,
                 step: stepCounter
               },
@@ -1528,9 +2686,7 @@ export class FunctionalRunner {
             });
             failFunctionalTestCase(testCaseTracker, flowStepCase, {
               severity: "P2",
-              actual: loginAssistEnabled
-                ? "Manual login assist requires PLAYWRIGHT_HEADLESS=false."
-                : "Login assist is disabled for this functional run.",
+              actual: "Login assist is disabled for this functional run.",
               selector: action.selector ?? null,
               pageUrl: nextSnapshot.url,
               canonicalUrl: safeCanonical(nextSnapshot.url),
@@ -1552,6 +2708,7 @@ export class FunctionalRunner {
             step: stepCounter,
             flow,
             action,
+            initialProbe: gateAuthProbe,
             shouldStop
           });
           snapshot = assistResult.snapshot ?? nextSnapshot;
@@ -1600,12 +2757,24 @@ export class FunctionalRunner {
                 flowBlocked = true;
                 break;
               }
-              await browserSession.goto(session.startUrl);
+              const restartTargetUrl =
+                resolveFunctionalFlowEntryUrl([
+                  sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+                  sessionStore.getSession(sessionId)?.loginAssist?.resumeTargetUrl,
+                  assistResult.snapshot?.url,
+                  snapshot.url,
+                  flowEntryUrl,
+                  session.startUrl
+                ]) || flowEntryUrl || session.startUrl;
+              flowEntryUrl = restartTargetUrl;
+              await browserSession.goto(restartTargetUrl);
               snapshot = await browserSession.capture(`functional-flow-restart-${flow.flowId}-${stepCounter}`, {
                 includeUiuxSignals: false,
                 includeFocusProbe: false
               });
               captureContractSnapshot(contractAccumulator, snapshot);
+              observeFunctionalDocsSnapshot(docsAccumulator, snapshot);
+              observeFunctionalDocsForms(docsAccumulator, deriveFunctionalFormGroups(snapshot));
               currentSemantics = extractFormSemantics(snapshot);
               runHistory.push({ step: stepCounter, url: snapshot.url });
               sessionStore.patchSession(sessionId, {
@@ -1614,6 +2783,13 @@ export class FunctionalRunner {
                 frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
                 artifactIndex: browserSession.getArtifactIndex()
               });
+              flowEntryUrl =
+                resolveFunctionalFlowEntryUrl([
+                  sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+                  snapshot.url,
+                  flowEntryUrl,
+                  session.startUrl
+                ]) || flowEntryUrl;
               restartFlow = true;
               completeFunctionalTestCase(testCaseTracker, flowStepCase, {
                 status: "skipped",
@@ -1634,6 +2810,13 @@ export class FunctionalRunner {
               frame: `data:image/png;base64,${snapshot.screenshotBase64}`,
               artifactIndex: browserSession.getArtifactIndex()
             });
+            flowEntryUrl =
+              resolveFunctionalFlowEntryUrl([
+                sessionStore.getSession(sessionId)?.authAssist?.resumeTargetUrl,
+                snapshot.url,
+                flowEntryUrl,
+                session.startUrl
+              ]) || flowEntryUrl;
             completeFunctionalTestCase(testCaseTracker, flowStepCase, {
               status: "passed",
               actual: "Manual login assist succeeded and flow continued safely.",
@@ -1717,8 +2900,53 @@ export class FunctionalRunner {
           break;
         }
 
+        const formAssistResult = await this.waitForFormAssist({
+          session,
+          sessionId,
+          browserSession,
+          sessionStore,
+          emitSessionUpdate,
+          snapshot: nextSnapshot,
+          step: stepCounter,
+          flow,
+          shouldStop
+        });
+        if (formAssistResult.status === "timeout") {
+          this.appendFunctionalBlocker({
+            blockers,
+            blockerTimeline,
+            blocker: {
+              type: formAssistResult.code ?? "FORM_ASSIST_TIMEOUT",
+              confidence: 0.94,
+              rationale: formAssistResult.rationale ?? "Form assist timed out before user decision.",
+              flowId: flow.flowId,
+              step: stepCounter
+            },
+            step: stepCounter,
+            action: "form-assist",
+            url: nextSnapshot.url
+          });
+          failFunctionalTestCase(testCaseTracker, flowStepCase, {
+            severity: "P2",
+            actual: formAssistResult.rationale ?? "Form assist timed out before user decision.",
+            selector: action.selector ?? null,
+            pageUrl: nextSnapshot.url,
+            canonicalUrl: safeCanonical(nextSnapshot.url),
+            deviceLabel: nextSnapshot.viewportLabel ?? snapshot.viewportLabel ?? "desktop",
+            evidenceRefs: buildEvidenceRefs(nextSnapshot)
+          });
+          flowBlocked = true;
+          break;
+        }
+        if (formAssistResult.snapshot) {
+          nextSnapshot = formAssistResult.snapshot;
+          captureContractSnapshot(contractAccumulator, nextSnapshot);
+          observeFunctionalDocsSnapshot(docsAccumulator, nextSnapshot);
+          observeFunctionalDocsForms(docsAccumulator, deriveFunctionalFormGroups(nextSnapshot));
+        }
+
         const evidenceRefs = buildEvidenceRefs(nextSnapshot);
-        const assertionResults = evaluateCoreFunctionalRules({
+        const evaluatedAssertions = evaluateCoreFunctionalRules({
           beforeSnapshot: snapshot,
           afterSnapshot: nextSnapshot,
           action,
@@ -1727,8 +2955,50 @@ export class FunctionalRunner {
           flowBaselineSnapshot,
           assertionsConfig,
           contractsConfig,
-          evidenceRefs
+          evidenceRefs,
+          allowedRuleIds: checkSelection.selectionActive ? checkSelection.allowedRuleIds : null
         });
+        const verificationResolution = await this.waitForVerificationAssist({
+          sessionId,
+          sessionStore,
+          emitSessionUpdate,
+          snapshot: nextSnapshot,
+          step: stepCounter,
+          flow,
+          assertionResults: evaluatedAssertions,
+          shouldStop
+        });
+        docsAccumulator.verificationPrompts += Number(verificationResolution.prompted ?? 0);
+        docsAccumulator.verificationOverrides += Number(verificationResolution.overrides ?? 0);
+        if (verificationResolution.timedOut) {
+          this.appendFunctionalBlocker({
+            blockers,
+            blockerTimeline,
+            blocker: {
+              type: "VERIFICATION_CONFIRMATION_TIMEOUT",
+              confidence: 0.95,
+              rationale: "Verification confirmation timed out before user decision.",
+              flowId: flow.flowId,
+              step: stepCounter
+            },
+            step: stepCounter,
+            action: action.type,
+            url: nextSnapshot.url
+          });
+          failFunctionalTestCase(testCaseTracker, flowStepCase, {
+            severity: "P2",
+            actual: "Verification confirmation timed out before user decision.",
+            selector: action.selector ?? null,
+            pageUrl: nextSnapshot.url,
+            canonicalUrl: safeCanonical(nextSnapshot.url),
+            deviceLabel: nextSnapshot.viewportLabel ?? "desktop",
+            evidenceRefs
+          });
+          flowBlocked = true;
+          break;
+        }
+
+        const assertionResults = verificationResolution.resolvedAssertions ?? evaluatedAssertions;
         flowAssertions.push(...assertionResults);
 
         for (const assertion of assertionResults) {
@@ -1881,6 +3151,150 @@ export class FunctionalRunner {
       flowIndex += 1;
     }
 
+    if (!blockers.length && shouldRunFinalLogoutStage) {
+      const currentAuthAssist = sessionStore.getSession(sessionId)?.authAssist ?? null;
+      if (currentAuthAssist && typeof currentAuthAssist === "object") {
+        sessionStore.patchSession(sessionId, {
+          authAssist: {
+            ...currentAuthAssist,
+            runtime: {
+              ...(currentAuthAssist.runtime ?? {}),
+              currentFunctionalPhase: "final_logout",
+              logoutScheduled: true,
+              logoutExecuted: false
+            }
+          }
+        });
+      }
+      stepCounter += 1;
+      const logoutCase = startFunctionalTestCase(testCaseTracker, {
+        type: "functional",
+        pageUrl: snapshot.url,
+        canonicalUrl: safeCanonical(snapshot.url),
+        deviceLabel: snapshot.viewportLabel ?? "desktop",
+        caseKind: "ASSERTION",
+        ruleId: "LOGOUT_ENDS_SESSION",
+        expected: "Logout should terminate the authenticated session after authenticated checks complete."
+      });
+      const logoutStage = await this.runFinalLogoutStage({
+        session,
+        sessionId,
+        runConfig,
+        browserSession,
+        sessionStore,
+        snapshot,
+        step: stepCounter,
+        shouldStop
+      });
+      const logoutSnapshot = logoutStage.afterSnapshot ?? snapshot;
+      const logoutEvidence = buildEvidenceRefs(logoutSnapshot);
+      flowResults.push({
+        flowId: "logout-final",
+        flowType: "LOGOUT_FINAL_STAGE",
+        label: "Final logout validation",
+        stepsExecuted: logoutStage.status === "skipped" ? 0 : 1,
+        assertionFailures: logoutStage.status === "failed" ? 1 : 0,
+        assertionPasses: logoutStage.status === "passed" ? 1 : 0,
+        blocked: false
+      });
+
+      if (logoutStage.status === "passed") {
+        completeFunctionalTestCase(testCaseTracker, logoutCase, {
+          status: "passed",
+          actual: logoutStage.reason,
+          ruleId: "LOGOUT_ENDS_SESSION",
+          pageUrl: logoutSnapshot.url,
+          canonicalUrl: safeCanonical(logoutSnapshot.url),
+          deviceLabel: logoutSnapshot.viewportLabel ?? "desktop",
+          evidenceRefs: logoutEvidence
+        });
+      } else if (logoutStage.status === "skipped") {
+        completeFunctionalTestCase(testCaseTracker, logoutCase, {
+          status: "skipped",
+          severity: "P3",
+          actual: logoutStage.reason,
+          ruleId: "LOGOUT_ENDS_SESSION",
+          pageUrl: logoutSnapshot.url ?? snapshot.url,
+          canonicalUrl: safeCanonical(logoutSnapshot.url ?? snapshot.url),
+          deviceLabel: logoutSnapshot.viewportLabel ?? snapshot.viewportLabel ?? "desktop",
+          evidenceRefs: logoutEvidence
+        });
+      } else {
+        const logoutIssue = {
+          issueType: "FUNCTIONAL_ASSERTION_FAILED",
+          severity: "P2",
+          title: "LOGOUT_ENDS_SESSION",
+          expected: "Logout should terminate the authenticated session after authenticated checks complete.",
+          actual: logoutStage.reason,
+          confidence: 0.86,
+          evidenceRefs: logoutEvidence,
+          affectedSelector: null,
+          affectedUrl: logoutSnapshot.url ?? snapshot.url,
+          flowId: "logout-final",
+          flowType: "LOGOUT_FINAL_STAGE",
+          assertionId: "LOGOUT_ENDS_SESSION",
+          step: stepCounter,
+          viewportLabel: logoutSnapshot.viewportLabel ?? snapshot.viewportLabel ?? "desktop",
+          repro: {
+            viewportLabel: logoutSnapshot.viewportLabel ?? snapshot.viewportLabel ?? "desktop",
+            step: stepCounter,
+            url: logoutSnapshot.url ?? snapshot.url,
+            canonicalUrl: safeCanonical(logoutSnapshot.url ?? snapshot.url),
+            targetSelector: null,
+            actionContext: {
+              actionType: "click",
+              functionalKind: "logout",
+              label: "Logout"
+            },
+            evidenceRefs: logoutEvidence
+          }
+        };
+        functionalIssues.push(logoutIssue);
+        failFunctionalTestCase(testCaseTracker, logoutCase, {
+          severity: "P2",
+          actual: logoutStage.reason,
+          ruleId: "LOGOUT_ENDS_SESSION",
+          pageUrl: logoutSnapshot.url ?? snapshot.url,
+          canonicalUrl: safeCanonical(logoutSnapshot.url ?? snapshot.url),
+          deviceLabel: logoutSnapshot.viewportLabel ?? snapshot.viewportLabel ?? "desktop",
+          evidenceRefs: logoutEvidence
+        });
+      }
+
+      sessionStore.appendTimeline?.(sessionId, {
+        type: "functional-logout-stage",
+        message: logoutStage.reason
+      });
+      const postLogoutAuthAssist = sessionStore.getSession(sessionId)?.authAssist ?? null;
+      if (postLogoutAuthAssist && typeof postLogoutAuthAssist === "object") {
+        sessionStore.patchSession(sessionId, {
+          authAssist: {
+            ...postLogoutAuthAssist,
+            runtime: {
+              ...(postLogoutAuthAssist.runtime ?? {}),
+              currentFunctionalPhase: "final_logout",
+              logoutScheduled: true,
+              logoutExecuted: logoutStage.status !== "skipped"
+            }
+          }
+        });
+      }
+      snapshot = logoutSnapshot;
+      currentSemantics = extractFormSemantics(snapshot);
+      runHistory.push({ step: stepCounter, url: snapshot.url });
+    }
+
+    const contractSummary = finalizeContractSummary(contractAccumulator, runConfig, functionalIssues);
+    const websiteDocumentation = formatWebsiteDocumentation({
+      session,
+      flows: flowResults,
+      issues: functionalIssues,
+      blockers,
+      loginAssist: loginAssistSummary,
+      contractSummary,
+      docsAccumulator
+    });
+
     const aggregated = aggregateFunctionalRunnerResult({
       flows: flowResults,
       issues: functionalIssues,
@@ -1888,7 +3302,8 @@ export class FunctionalRunner {
       blockerTimeline,
       resumePoints,
       loginAssist: loginAssistSummary,
-      contractSummary: finalizeContractSummary(contractAccumulator, runConfig, functionalIssues)
+      contractSummary,
+      websiteDocumentation
     });
 
     return {

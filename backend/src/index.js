@@ -8,6 +8,7 @@ import { createAuditorProvider } from "./providers/auditorProvider.js";
 import { createDocumentarianProvider } from "./providers/documentarianProvider.js";
 import { createExplorerProvider } from "./providers/explorerProvider.js";
 import { createSessionRouter } from "./routes/sessionRoutes.js";
+import { createServerRuntimeInfo } from "./lib/runtimeInfo.js";
 import { QaOrchestrator } from "./orchestrator/qaOrchestrator.js";
 import { EventBus } from "./services/eventBus.js";
 import { SessionPersistence } from "./services/sessionPersistence.js";
@@ -23,6 +24,7 @@ const sessionStore = new SessionStore({
   persistence: new SessionPersistence(config.sessionsDir)
 });
 const documentarianProvider = createDocumentarianProvider();
+const runtimeInfo = createServerRuntimeInfo();
 const orchestrator = new QaOrchestrator({
   eventBus,
   sessionStore,
@@ -156,6 +158,13 @@ function mapSocketEvent(type, payload) {
     };
   }
 
+  if (type === "agent.activity") {
+    return {
+      event: "agent.activity",
+      data: payload
+    };
+  }
+
   if (type === "testcase.stats") {
     return {
       event: "testcase:stats",
@@ -179,7 +188,7 @@ app.use(
 app.options(/.*/, cors(corsOptions));
 app.use(express.json({ limit: "15mb" }));
 app.use("/artifacts", express.static(config.artifactsDir));
-app.use("/api", createSessionRouter(orchestrator, sessionStore, documentarianProvider));
+app.use("/api", createSessionRouter(orchestrator, sessionStore, documentarianProvider, { runtimeInfo }));
 app.use("/api", (_req, res) => {
   res.status(404).json({
     ok: false,
@@ -219,4 +228,7 @@ io.on("connection", (socket) => {
 server.listen(config.port, () => {
   console.log(`QA orchestrator listening on http://localhost:${config.port}`);
   console.log(`CORS allowed origins: ${allowedCorsOrigins.join(", ")}`);
+  console.log(
+    `Runtime version: ${runtimeInfo.version} (${runtimeInfo.gitShortHash}) capability.functionalityLoginAssist=${runtimeInfo.capabilities?.functionalityLoginAssist === true}`
+  );
 });

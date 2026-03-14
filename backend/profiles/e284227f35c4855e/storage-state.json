@@ -1,0 +1,75 @@
+{
+  "cookies": [
+    {
+      "name": "_octo",
+      "value": "GH1.1.77199078.1773127401",
+      "domain": ".github.com",
+      "path": "/",
+      "expires": 1804667001.42457,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "logged_in",
+      "value": "no",
+      "domain": ".github.com",
+      "path": "/",
+      "expires": 1804667001.424965,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "cpu_bucket",
+      "value": "xlg",
+      "domain": ".github.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "preferred_color_mode",
+      "value": "light",
+      "domain": ".github.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "tz",
+      "value": "America%2FNew_York",
+      "domain": ".github.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_device_id",
+      "value": "223093886599da198a6c259937d2c49b",
+      "domain": "github.com",
+      "path": "/",
+      "expires": 1804663401.716763,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gh_sess",
+      "value": "0vpVAFvCVUfX%2BPJXMsmPuZuj%2FWdMSiRc6WxufB8UNLKzirOccRMTTrzDTdw5caE7HHtb0s40fGZ6vQu%2B631E2A%2Fa2%2FM5MnIN7eCTQv3HcZ%2FdBpv6e7fMkfUZTEwi721u1dE8EbVnMXHPYS4bGimoGFZCwZ3b9CGTpOU7H6rTvHinnYioFJgySOCfC157IMaJaqbV7DMB460J%2BY41GfGDWZfV7E3CgCOiW0uju6r0lFGKm0CADXgU3fNSJg0iJ1YFO%2FDh%2FwP%2FFpVUD6MN31k8Q6VYKYfPS0jpm4wiZxhYVBlzigFjBF4lRA4pZ%2B%2BlTJ7eEwyygpEuHMb9SezSVzOxkuoK6wF4ipjtF2OK0og5IP9ADOtjTX1LK5EsH7KpazE4XmzC2mbQTzHI7vP7ZXwcRw5waD%2F7hruCYGYCxX3FgFT8XSJRoCaNxLzkMuISG3D8Wgw%2B2kpiFqzHQ1DMdkLlxxUqykjrVvUUR7UsMvX596b%2BAXXI--VXlx8z9f%2BL4oayBm--TOOC3Gs1ddbhsY8agexmAQ%3D%3D",
+      "domain": "github.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": []
+}

@@ -4,9 +4,30 @@ import ArtifactsList from "../components/ArtifactsList";
 import DeviceSummary from "../components/DeviceSummary";
 import EvidenceViewer from "../components/EvidenceViewer";
 import FailuresDrawer from "../components/FailuresDrawer";
+import FormAssistModal from "../components/FormAssistModal";
 import LiveViewer from "../components/LiveViewer";
 import RunProgress from "../components/RunProgress";
-import { canShowStopButton, isRunActive } from "../lib/runState";
+import VerificationAssistModal from "../components/VerificationAssistModal";
+import {
+  buildAuthInputFieldsPayload,
+  deriveAuthAssistFieldVisibility
+} from "../lib/authAssistFields";
+import {
+  activityStatusTone,
+  deriveProgressActionLogs,
+  deriveAgentActivitySummary,
+  formatActivityElapsed,
+  formatActivityTimestamp,
+  normalizeAgentActivityEntries,
+  shouldHighlightLogoutActivity
+} from "../lib/agentActivity";
+import { formatAuthAssistStatusLabel, formatRunTargetForDisplay } from "../lib/dashboardUi";
+import {
+  buildRunConsoleDetailToggleOptions,
+  isRunConsoleDetailVisible,
+  toggleRunConsoleDetailSelection
+} from "../lib/runConsoleDetails";
+import { canShowStopButton, deriveAuthAssistUiState, isRunActive } from "../lib/runState";
 import { resumeSession } from "../services/sessionsService";
 
 function severityRank(level = "P3") {
@@ -74,6 +95,8 @@ function normalizeFailure({
   groupId,
   mode,
   issueType,
+  canonicalIssueFamily,
+  sourceIssueTypes,
   title,
   summary,
   testcaseId,
@@ -87,8 +110,11 @@ function normalizeFailure({
   expected,
   actual,
   whyItFailed,
+  description,
   occurrenceCount,
+  affectedDeviceCount,
   devices,
+  component,
   primaryEvidence,
   grouped,
   explanation,
@@ -107,6 +133,8 @@ function normalizeFailure({
     groupId: groupId ?? null,
     mode: mode ?? "default",
     issueType: issueType ?? "ISSUE",
+    canonicalIssueFamily: canonicalIssueFamily ?? null,
+    sourceIssueTypes: Array.isArray(sourceIssueTypes) ? sourceIssueTypes : [],
     title: title ?? issueType ?? "Issue",
     summary: summary ?? "",
     testcaseId: testcaseId ?? null,
@@ -120,8 +148,11 @@ function normalizeFailure({
     expected: expected ?? "",
     actual: actual ?? "",
     whyItFailed: whyItFailed ?? "",
+    description: description ?? null,
     occurrenceCount: Number(occurrenceCount ?? 1),
+    affectedDeviceCount: Number(affectedDeviceCount ?? (Array.isArray(devices) ? devices.length : 1)),
     devices: Array.isArray(devices) ? devices : [],
+    component: component ?? null,
     primaryEvidence: primaryEvidence ?? null,
     grouped: Boolean(grouped),
     explanation: explanation ?? null,
@@ -152,6 +183,8 @@ function collectFailures(report, mode) {
           mode: "uiux",
           grouped: true,
           issueType: group.issueType,
+          canonicalIssueFamily: group.canonicalIssueFamily ?? null,
+          sourceIssueTypes: group.sourceIssueTypes ?? [],
           title: group.title,
           summary:
             group.summary ??
@@ -176,6 +209,8 @@ function collectFailures(report, mode) {
             "The rendered UI state did not satisfy deterministic checks.",
           devices: group.devices ?? [],
           occurrenceCount: group.occurrenceCount ?? group.devices?.length ?? 1,
+          affectedDeviceCount: group.affectedDeviceCount ?? group.devices?.length ?? 1,
+          component: group.component ?? null,
           primaryEvidence: group.primaryEvidence ?? null,
           explanation: group.explanation ?? null,
           highlight: group.primaryEvidence?.highlight ?? group.highlight ?? null,
@@ -281,7 +316,13 @@ function collectFailures(report, mode) {
         step: issue.step ?? issue.repro?.step,
         expected: issue.expected,
         actual: issue.actual,
-        whyItFailed: issue.explanation?.whyItFailed ?? issue.actual ?? "Assertion failed.",
+        whyItFailed:
+          issue.description?.whyItFailed ??
+          issue.explanation?.whyItFailed ??
+          issue.actual ??
+          "Assertion failed.",
+        description: issue.description ?? null,
+        primaryEvidence: issue.primaryEvidence ?? null,
         explanation: issue.explanation ?? null,
         affectedSelector: issue.repro?.targetSelector ?? issue.selector ?? null,
         evidenceRefs: issue.evidenceRefs
@@ -311,6 +352,24 @@ function collectFailures(report, mode) {
         explanation: issue.explanation ?? null,
         affectedSelector: issue.affectedSelector ?? issue.repro?.selector ?? null,
         evidenceRefs: issue.evidenceRefs
+      })
+    );
+  }
+
+  if (mode === "performance") {
+    return (report.performance?.failures ?? report.performance?.issues ?? []).map((issue, index) =>
+      normalizeFailure({
+        id: issue.id ?? `performance-${index}`,
+        mode: "performance",
+        issueType: issue.issueType ?? "PERFORMANCE_ISSUE",
+        title: issue.title ?? issue.issueType ?? "Performance issue",
+        summary: issue.summary ?? issue.actual ?? issue.title ?? issue.issueType,
+        severity: issue.severity ?? "P2",
+        pageUrl: issue.affectedUrl ?? report?.currentUrl ?? session?.currentUrl ?? session?.startUrl ?? "",
+        expected: issue.expected ?? "",
+        actual: issue.actual ?? "",
+        whyItFailed: issue.actual ?? issue.summary ?? "Performance budget exceeded.",
+        evidenceRefs: issue.evidenceRefs ?? []
       })
     );
   }
@@ -388,7 +447,7 @@ function authStateTone(state = "") {
   if (state === "auth_failed") {
     return "border-rose-400/40 bg-rose-500/20 text-rose-100";
   }
-  if (state === "submitting_credentials" || state === "submitting_otp") {
+  if (state === "submitting_credentials" || state === "submitting_input_fields" || state === "submitting_otp") {
     return "border-amber-400/40 bg-amber-500/20 text-amber-100";
   }
   return "border-cyan-400/40 bg-cyan-500/20 text-cyan-100";
@@ -404,9 +463,18 @@ export default function RunConsole({
   socketConnected,
   fetchSession,
   fetchReport,
+  submitAuthInputFields,
   submitAuthCredentials,
   submitAuthOtp,
   skipAuthCredentials,
+  submitFormGroup,
+  skipFormGroup,
+  autoFormGroup,
+  updateFormGroupDescription,
+  skipAllForms,
+  autoAllForms,
+  resolveVerificationPrompt,
+  resolveAllVerificationPrompts,
   stopRun
 }) {
   const { sessionId } = useParams();
@@ -418,14 +486,15 @@ export default function RunConsole({
   const [evidenceViewerOpen, setEvidenceViewerOpen] = useState(false);
   const [selectedFailure, setSelectedFailure] = useState(null);
   const [nowMs, setNowMs] = useState(Date.now());
-  const [authUsername, setAuthUsername] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authOtp, setAuthOtp] = useState("");
+  const [authInputValues, setAuthInputValues] = useState({});
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authStatusMessage, setAuthStatusMessage] = useState("");
   const [stopSubmitting, setStopSubmitting] = useState(false);
   const [stopError, setStopError] = useState("");
+  const [activityPhaseFilter, setActivityPhaseFilter] = useState("all");
+  const [activityStatusFilter, setActivityStatusFilter] = useState("all");
+  const [visibleDetailSection, setVisibleDetailSection] = useState(null);
 
   const session = useMemo(
     () => sessions.find((entry) => entry.id === sessionId) ?? null,
@@ -543,35 +612,126 @@ export default function RunConsole({
   );
   const deterministicSummary = mergedReport?.summaryText?.deterministic ?? "Summary not available yet.";
   const llmSummary = mergedReport?.summaryText?.llm ?? null;
+  const uiuxHandbookSummary =
+    mergedReport?.uiux?.handbookCoverage?.summary ??
+    mergedReport?.uiuxSummary?.handbookCoverage?.summary ??
+    null;
   const showStopButton = canShowStopButton(session?.status);
   const authAssist = useMemo(() => normalizeAuthAssist(session), [session]);
-  const authState = authAssist?.state ?? null;
-  const otpPending = Boolean(
-    authAssist &&
-      (
-        authState === "awaiting_otp" ||
-        authState === "submitting_otp" ||
-        authAssist.code === "OTP_REQUIRED" ||
-        authAssist.code === "OTP_INVALID"
-      )
+  const { authState, otpPending, credentialsPending, showAuthAssistPanel } = useMemo(
+    () =>
+      deriveAuthAssistUiState({
+        status: session?.status,
+        authAssist
+      }),
+    [authAssist, session?.status]
   );
-  const credentialsPending = Boolean(
-    authAssist &&
-      (
-        authState === "awaiting_username" ||
-        authState === "awaiting_password" ||
-        authState === "awaiting_credentials" ||
-        authState === "auth_step_advanced" ||
-        authState === "auth_unknown_state" ||
-        authState === "submitting_credentials" ||
-        (authState === "auth_failed" && !otpPending)
-      )
+  const authFieldVisibility = useMemo(
+    () => deriveAuthAssistFieldVisibility(authAssist),
+    [authAssist]
   );
-  const showAuthAssistPanel = Boolean(
-    authAssist &&
-      !["resumed", "authenticated"].includes(authState ?? "") &&
-      (credentialsPending || otpPending || session?.status === "login-assist" || session?.status === "waiting-login")
+  const submitAuthFields = submitAuthInputFields ?? submitAuthCredentials;
+  const canSubmitAuthFields = useMemo(() => {
+    const fields = Array.isArray(authFieldVisibility.renderFields) ? authFieldVisibility.renderFields : [];
+    if (fields.length === 0) {
+      return false;
+    }
+    const hasAnyValue = fields.some((field) => String(authInputValues[field.key] ?? "").trim().length > 0);
+    if (!hasAnyValue) {
+      return false;
+    }
+    return fields.every((field) => !field.required || String(authInputValues[field.key] ?? "").trim().length > 0);
+  }, [authFieldVisibility.renderFields, authInputValues]);
+  const shouldRenderAuthAssistPanel = Boolean(
+    showAuthAssistPanel &&
+      (mode !== "uiux" || authFieldVisibility.renderFields.length > 0)
   );
+  const formAssist = session?.formAssist ?? null;
+  const verificationAssist = session?.verificationAssist ?? null;
+  const showFormAssistModal = Boolean(
+    mode === "functional" &&
+      formAssist &&
+      formAssist.state === "awaiting_user" &&
+      Array.isArray(formAssist.groups) &&
+      formAssist.groups.length > 0
+  );
+  const showVerificationAssistModal = Boolean(
+    mode === "functional" &&
+      verificationAssist &&
+      verificationAssist.state === "awaiting_user" &&
+      Array.isArray(verificationAssist.prompts) &&
+      verificationAssist.prompts.length > 0
+  );
+  const websiteDocumentation =
+    mergedReport?.functional?.websiteDocumentation ??
+    session?.functional?.websiteDocumentation ??
+    null;
+  const detailToggleOptions = useMemo(
+    () =>
+      buildRunConsoleDetailToggleOptions({
+        mode,
+        failureCount: failures.length,
+        advisoryCount: uiuxCalibratedAdvisories.length,
+        hasUiuxHandbook: Boolean(mode === "uiux" && uiuxHandbookSummary),
+        hasWebsiteDocs: Boolean(mode === "functional" && websiteDocumentation?.markdown)
+      }),
+    [mode, failures.length, uiuxCalibratedAdvisories.length, uiuxHandbookSummary, websiteDocumentation?.markdown]
+  );
+  const availableDetailKeys = useMemo(
+    () => detailToggleOptions.map((entry) => entry.key),
+    [detailToggleOptions]
+  );
+  const activeDetailCount = useMemo(
+    () => (isRunConsoleDetailVisible(visibleDetailSection, visibleDetailSection, availableDetailKeys) ? 1 : 0),
+    [availableDetailKeys, visibleDetailSection]
+  );
+  const isDetailVisible = (key) =>
+    isRunConsoleDetailVisible(visibleDetailSection, key, availableDetailKeys);
+
+  const agentActivityEntries = useMemo(
+    () => normalizeAgentActivityEntries(session?.agentActivity ?? []),
+    [session?.agentActivity, session?.updatedAt]
+  );
+  const activitySummary = useMemo(
+    () => deriveAgentActivitySummary(agentActivityEntries),
+    [agentActivityEntries]
+  );
+  const progressActionLogs = useMemo(() => {
+    return deriveProgressActionLogs({
+      session,
+      entries: agentActivityEntries
+    });
+  }, [session, agentActivityEntries]);
+  const activityPhaseOptions = useMemo(() => {
+    const phases = new Set(agentActivityEntries.map((entry) => entry.phase));
+    return ["all", ...[...phases].sort((left, right) => left.localeCompare(right))];
+  }, [agentActivityEntries]);
+  const filteredActivityEntries = useMemo(() => {
+    return agentActivityEntries.filter((entry) => {
+      if (activityPhaseFilter !== "all" && entry.phase !== activityPhaseFilter) {
+        return false;
+      }
+      if (activityStatusFilter !== "all" && entry.status !== activityStatusFilter) {
+        return false;
+      }
+      return true;
+    });
+  }, [activityPhaseFilter, activityStatusFilter, agentActivityEntries]);
+  const authAssistCurrentMessage = shouldRenderAuthAssistPanel
+    ? (authAssist?.reason ||
+        (otpPending ? "Awaiting OTP input." : "Awaiting input fields."))
+    : null;
+  const currentCaseTitle =
+    currentCase?.caseKind ??
+    progressActionLogs.current?.message ??
+    authAssistCurrentMessage ??
+    (session?.status === "running" ? "Evaluating current page." : "No active case");
+  const currentCaseDevice = currentCase?.deviceLabel ??
+    (progressActionLogs.current?.phase
+      ? `${progressActionLogs.current.phase}${progressActionLogs.current.status ? ` · ${progressActionLogs.current.status}` : ""}`
+      : "-");
+  const currentCasePage = currentCase?.pageUrl ?? session.currentUrl ?? "-";
+  const currentCaseNextAction = progressActionLogs.next?.message ?? "-";
 
   const extractErrorMessage = (error, fallback) => {
     if (!error) {
@@ -592,6 +752,20 @@ export default function RunConsole({
     return fallback;
   };
 
+  useEffect(() => {
+    setAuthInputValues((current) => {
+      const next = {};
+      for (const field of authFieldVisibility.renderFields ?? []) {
+        const key = String(field?.key ?? "").trim();
+        if (!key) {
+          continue;
+        }
+        next[key] = current[key] ?? "";
+      }
+      return next;
+    });
+  }, [authFieldVisibility.renderFields, authAssist?.state, session?.id]);
+
   const openEvidenceViewer = (failure) => {
     if (!failure) {
       return;
@@ -600,48 +774,45 @@ export default function RunConsole({
     setEvidenceViewerOpen(true);
   };
 
-  const submitCredentials = async (event) => {
-    event.preventDefault();
-    if (!sessionId || !submitAuthCredentials) {
-      return;
-    }
-    setAuthError("");
-    setAuthStatusMessage("");
-    setAuthSubmitting(true);
-    try {
-      const response = await submitAuthCredentials(sessionId, {
-        identifier: authUsername,
-        username: authUsername,
-        email: authUsername,
-        password: authPassword
-      });
-      setAuthPassword("");
-      setAuthStatusMessage(response?.message ?? "Credentials submitted.");
-      await fetchSession(sessionId).catch(() => null);
-    } catch (error) {
-      setAuthError(extractErrorMessage(error, "Credential submission failed."));
-    } finally {
-      setAuthSubmitting(false);
-    }
+  const toggleDetailSection = (key) => {
+    setVisibleDetailSection((current) => toggleRunConsoleDetailSelection(current, key));
   };
 
-  const submitOtp = async (event) => {
+  useEffect(() => {
+    if (!isRunConsoleDetailVisible(visibleDetailSection, visibleDetailSection, availableDetailKeys)) {
+      setVisibleDetailSection(null);
+    }
+  }, [availableDetailKeys, visibleDetailSection]);
+
+  const submitInputFields = async (event) => {
     event.preventDefault();
-    if (!sessionId || !submitAuthOtp) {
+    if (!sessionId || !submitAuthFields) {
       return;
     }
     setAuthError("");
     setAuthStatusMessage("");
     setAuthSubmitting(true);
     try {
-      const response = await submitAuthOtp(sessionId, {
-        otp: authOtp
+      const fields = Array.isArray(authFieldVisibility.renderFields) ? authFieldVisibility.renderFields : [];
+      const payload = buildAuthInputFieldsPayload({
+        renderFields: fields,
+        values: authInputValues
       });
-      setAuthOtp("");
-      setAuthStatusMessage(response?.message ?? "OTP submitted.");
+
+      const response = await submitAuthFields(sessionId, payload);
+      setAuthInputValues((current) => {
+        const next = { ...current };
+        for (const field of fields) {
+          if (field.secret) {
+            next[field.key] = "";
+          }
+        }
+        return next;
+      });
+      setAuthStatusMessage(response?.message ?? "Input fields submitted.");
       await fetchSession(sessionId).catch(() => null);
     } catch (error) {
-      setAuthError(extractErrorMessage(error, "OTP submission failed."));
+      setAuthError(extractErrorMessage(error, "Input-field submission failed."));
     } finally {
       setAuthSubmitting(false);
     }
@@ -674,7 +845,7 @@ export default function RunConsole({
     setAuthSubmitting(true);
     try {
       const response = await skipAuthCredentials(sessionId, {
-        reason: "Credential submission skipped by user from dashboard."
+        reason: "Input-field submission skipped by user from dashboard."
       });
       setAuthStatusMessage(response?.message ?? "Authentication step skipped.");
       await fetchSession(sessionId).catch(() => null);
@@ -702,6 +873,70 @@ export default function RunConsole({
     } finally {
       setStopSubmitting(false);
     }
+  };
+
+  const submitFunctionalForm = async (groupId, payload = {}) => {
+    if (!sessionId || !submitFormGroup) {
+      return;
+    }
+    await submitFormGroup(sessionId, groupId, payload);
+    await fetchSession(sessionId).catch(() => null);
+  };
+
+  const skipFunctionalForm = async (groupId, payload = {}) => {
+    if (!sessionId || !skipFormGroup) {
+      return;
+    }
+    await skipFormGroup(sessionId, groupId, payload);
+    await fetchSession(sessionId).catch(() => null);
+  };
+
+  const autoFunctionalForm = async (groupId, payload = {}) => {
+    if (!sessionId || !autoFormGroup) {
+      return;
+    }
+    await autoFormGroup(sessionId, groupId, payload);
+    await fetchSession(sessionId).catch(() => null);
+  };
+
+  const updateFunctionalFormDescription = async (groupId, payload = {}) => {
+    if (!sessionId || !updateFormGroupDescription) {
+      return;
+    }
+    await updateFormGroupDescription(sessionId, groupId, payload);
+    await fetchSession(sessionId).catch(() => null);
+  };
+
+  const skipAllFunctionalForms = async (payload = {}) => {
+    if (!sessionId || !skipAllForms) {
+      return;
+    }
+    await skipAllForms(sessionId, payload);
+    await fetchSession(sessionId).catch(() => null);
+  };
+
+  const autoAllFunctionalForms = async (payload = {}) => {
+    if (!sessionId || !autoAllForms) {
+      return;
+    }
+    await autoAllForms(sessionId, payload);
+    await fetchSession(sessionId).catch(() => null);
+  };
+
+  const resolveVerification = async (promptId, payload = {}) => {
+    if (!sessionId || !resolveVerificationPrompt) {
+      return;
+    }
+    await resolveVerificationPrompt(sessionId, promptId, payload);
+    await fetchSession(sessionId).catch(() => null);
+  };
+
+  const resolveAllVerifications = async (payload = {}) => {
+    if (!sessionId || !resolveAllVerificationPrompts) {
+      return;
+    }
+    await resolveAllVerificationPrompts(sessionId, payload);
+    await fetchSession(sessionId).catch(() => null);
   };
 
   if (loading && !session) {
@@ -741,44 +976,47 @@ export default function RunConsole({
     <div className="h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto flex h-full max-w-[1600px] flex-col">
         <header className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/90 px-4 py-3 backdrop-blur sm:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => navigate("/")}
-                  className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/[0.05]"
-                >
-                  Dashboard
-                </button>
-                <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-semibold ${statusTone(session.status)}`}>
-                  {session.status}
-                </span>
-                <span className="rounded-full border border-white/10 px-2 py-1 font-mono text-xs text-slate-300">
-                  {mode}
-                </span>
-                <span
-                  className={`inline-flex rounded-full border px-2 py-1 text-xs ${
-                    socketConnected
-                      ? "border-emerald-400/30 text-emerald-200"
-                      : "border-rose-400/30 text-rose-200"
-                  }`}
-                >
-                  {socketConnected ? "Live" : "Offline"}
-                </span>
-              </div>
-              <p className="mt-2 truncate text-sm text-slate-300">{session.currentUrl ?? session.startUrl}</p>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-right">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Elapsed</p>
-              <p className="font-mono text-sm text-white">{formatDuration(elapsedMsForSession(session, nowMs))}</p>
-            </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/[0.05]"
+            >
+              Dashboard
+            </button>
+            <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-semibold ${statusTone(session.status)}`}>
+              {session.status}
+            </span>
+            <span className="rounded-full border border-white/10 px-2 py-1 font-mono text-xs text-slate-300">
+              {mode}
+            </span>
+            <span
+              className={`inline-flex rounded-full border px-2 py-1 text-xs ${
+                socketConnected
+                  ? "border-emerald-400/30 text-emerald-200"
+                  : "border-rose-400/30 text-rose-200"
+              }`}
+            >
+              {socketConnected ? "Live" : "Offline"}
+            </span>
+            <a
+              href={session.currentUrl ?? session.startUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="min-w-0 max-w-[36rem] truncate rounded-lg border border-white/10 px-2 py-1 text-xs text-cyan-100 hover:bg-white/[0.05]"
+              title={session.currentUrl ?? session.startUrl}
+            >
+              {formatRunTargetForDisplay(session.currentUrl ?? session.startUrl, { includePath: true })}
+            </a>
+            <span className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 font-mono text-xs text-white">
+              elapsed {formatDuration(elapsedMsForSession(session, nowMs))}
+            </span>
             {showStopButton ? (
               <button
                 type="button"
                 onClick={requestStop}
                 disabled={stopSubmitting}
-                className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-100 disabled:opacity-60"
+                className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-100 disabled:opacity-60"
               >
                 {stopSubmitting ? "Stopping..." : "Stop"}
               </button>
@@ -804,64 +1042,63 @@ export default function RunConsole({
             </div>
 
             <aside className="min-h-0 overflow-y-auto space-y-4 pr-1">
-              <RunProgress stats={testCaseStats} />
+              <RunProgress stats={testCaseStats} actionLogs={progressActionLogs} />
 
-              {showAuthAssistPanel ? (
-                <section className="rounded-2xl border border-cyan-300/25 bg-cyan-300/5 p-4">
+              {shouldRenderAuthAssistPanel ? (
+                <section className="rounded-2xl border border-cyan-300/25 bg-cyan-300/5 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100">
-                      Authentication Required
+                      Auth Input
                     </h2>
                     <span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-semibold ${authStateTone(authState)}`}>
-                      {authState ?? "awaiting_credentials"}
+                      {formatAuthAssistStatusLabel(authState)}
                     </span>
                   </div>
-                  <div className="mt-2 space-y-1 text-xs text-slate-300">
-                    <p className="truncate">Site: {authAssist?.site || "-"}</p>
-                    <p className="truncate">Page: {authAssist?.pageUrl || session.currentUrl || "-"}</p>
-                    <p>Profile: {session.runConfig?.profileTag || "-"}</p>
-                    {authAssist?.form?.visibleStep ? (
-                      <p>Visible step: {authAssist.form.visibleStep}</p>
-                    ) : null}
-                    {typeof authAssist?.submitAttempted === "boolean" ? (
-                      <p>Submit attempted: {authAssist.submitAttempted ? "yes" : "no"}</p>
-                    ) : null}
-                    {typeof authAssist?.resumeTriggered === "boolean" ? (
-                      <p>Resume triggered: {authAssist.resumeTriggered ? "yes" : "no"}</p>
-                    ) : null}
-                    {Number.isFinite(authAssist?.remainingMs) ? (
-                      <p>Time remaining: {formatDuration(Number(authAssist.remainingMs))}</p>
-                    ) : null}
-                    <p>{authAssist?.reason || "Submit credentials to continue the run."}</p>
-                  </div>
 
-                  {credentialsPending ? (
-                    <form className="mt-3 space-y-2" onSubmit={submitCredentials}>
-                      <input
-                        value={authUsername}
-                        onChange={(event) => setAuthUsername(event.target.value)}
-                        type="text"
-                        autoComplete="username"
-                        placeholder="Username or email"
-                        className="w-full rounded-lg border border-white/10 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 outline-none"
-                        disabled={authSubmitting}
-                      />
-                      <input
-                        value={authPassword}
-                        onChange={(event) => setAuthPassword(event.target.value)}
-                        type="password"
-                        autoComplete="current-password"
-                        placeholder="Password"
-                        className="w-full rounded-lg border border-white/10 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 outline-none"
-                        disabled={authSubmitting}
-                      />
+                  {authFieldVisibility.renderFields.length > 0 && (credentialsPending || otpPending) ? (
+                    <form className="mt-3 space-y-2" onSubmit={submitInputFields}>
+                      {authFieldVisibility.renderFields.map((field) => (
+                        <label key={field.key} className="block space-y-1">
+                          <span className="text-[11px] font-medium text-slate-300">{field.label}</span>
+                          <input
+                            value={authInputValues[field.key] ?? ""}
+                            onChange={(event) =>
+                              setAuthInputValues((current) => ({
+                                ...current,
+                                [field.key]: event.target.value
+                              }))
+                            }
+                            type={
+                              field.secret
+                                ? "password"
+                                : field.kind === "email"
+                                  ? "email"
+                                  : field.kind === "phone"
+                                    ? "tel"
+                                    : "text"
+                            }
+                            autoComplete={
+                              field.kind === "otp"
+                                ? "one-time-code"
+                                : field.kind === "password"
+                                  ? "current-password"
+                                  : field.kind === "email"
+                                    ? "email"
+                                    : "username"
+                            }
+                            placeholder={field.placeholder || field.label}
+                            className="w-full rounded-lg border border-white/10 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 outline-none"
+                            disabled={authSubmitting}
+                          />
+                        </label>
+                      ))}
                       <div className="flex items-center justify-between gap-2">
                         <button
                           type="submit"
-                          disabled={authSubmitting || !authUsername.trim() || !authPassword}
+                          disabled={authSubmitting || !canSubmitAuthFields}
                           className="rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 disabled:opacity-50"
                         >
-                          {authSubmitting ? "Submitting..." : "Submit Credentials"}
+                          {authSubmitting ? "Submitting..." : "Sign In"}
                         </button>
                         <button
                           type="button"
@@ -869,7 +1106,7 @@ export default function RunConsole({
                           disabled={authSubmitting}
                           className="rounded-lg border border-amber-300/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-100 disabled:opacity-50"
                         >
-                          Skip Credentials
+                          Skip
                         </button>
                         <button
                           type="button"
@@ -877,50 +1114,15 @@ export default function RunConsole({
                           disabled={authSubmitting}
                           className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50"
                         >
-                          Resume Check
+                          Resume
                         </button>
                       </div>
                     </form>
-                  ) : null}
-
-                  {otpPending ? (
-                    <form className="mt-3 space-y-2" onSubmit={submitOtp}>
-                      <input
-                        value={authOtp}
-                        onChange={(event) => setAuthOtp(event.target.value)}
-                        type="password"
-                        autoComplete="one-time-code"
-                        placeholder="OTP / verification code"
-                        className="w-full rounded-lg border border-white/10 bg-slate-900/80 px-3 py-2 text-xs text-slate-100 outline-none"
-                        disabled={authSubmitting}
-                      />
-                      <div className="flex items-center justify-between gap-2">
-                        <button
-                          type="submit"
-                          disabled={authSubmitting || !authOtp.trim()}
-                          className="rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 disabled:opacity-50"
-                        >
-                          {authSubmitting ? "Submitting..." : "Submit OTP"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={requestSkipCredentials}
-                          disabled={authSubmitting}
-                          className="rounded-lg border border-amber-300/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-100 disabled:opacity-50"
-                        >
-                          Skip Login
-                        </button>
-                        <button
-                          type="button"
-                          onClick={requestResume}
-                          disabled={authSubmitting}
-                          className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50"
-                        >
-                          Resume Check
-                        </button>
-                      </div>
-                    </form>
-                  ) : null}
+                  ) : (
+                    <p className="mt-2 text-xs text-slate-300">
+                      {authAssist?.reason || "Waiting for detected input fields."}
+                    </p>
+                  )}
 
                   {authError ? (
                     <p className="mt-2 rounded-lg border border-rose-400/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-100">
@@ -937,6 +1139,150 @@ export default function RunConsole({
 
               <section className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
                 <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">
+                    Details Toggle
+                  </h2>
+                  <span className="font-mono text-xs text-slate-500">
+                    {activeDetailCount}/{detailToggleOptions.length}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {detailToggleOptions.map((option) => {
+                    const active = isDetailVisible(option.key);
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => toggleDetailSection(option.key)}
+                        className={`rounded-full border px-2 py-1 text-[11px] font-semibold transition ${
+                          active
+                            ? "border-cyan-300/30 bg-cyan-300/15 text-cyan-100"
+                            : "border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {activeDetailCount === 0 ? (
+                  <p className="mt-3 rounded-lg border border-dashed border-white/10 bg-white/[0.03] px-2 py-2 text-xs text-slate-500">
+                    Select one or more sections above to view details.
+                  </p>
+                ) : null}
+              </section>
+
+              {isDetailVisible("activity") ? (
+              <section className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">
+                    Agent Activity
+                  </h2>
+                  <span className="font-mono text-xs text-slate-500">
+                    {filteredActivityEntries.length}/{agentActivityEntries.length}
+                  </span>
+                </div>
+
+                <div className="mt-2 grid gap-2 text-[11px] text-slate-300 md:grid-cols-3">
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Just did</p>
+                    <p className="mt-1 truncate text-slate-200">
+                      {activitySummary.justDid?.message ?? "No completed action yet."}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Doing now</p>
+                    <p className="mt-1 truncate text-slate-200">
+                      {activitySummary.doingNow?.message ?? "No active operation."}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Next action</p>
+                    <p className="mt-1 truncate text-slate-200">
+                      {activitySummary.nextAction?.message ?? "No planned action yet."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <label className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300">
+                    <span>Phase</span>
+                    <select
+                      value={activityPhaseFilter}
+                      onChange={(event) => setActivityPhaseFilter(event.target.value)}
+                      className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-100 outline-none"
+                    >
+                      {activityPhaseOptions.map((phase) => (
+                        <option key={phase} value={phase}>
+                          {phase}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300">
+                    <span>Status</span>
+                    <select
+                      value={activityStatusFilter}
+                      onChange={(event) => setActivityStatusFilter(event.target.value)}
+                      className="rounded bg-slate-900 px-1 py-0.5 text-[11px] text-slate-100 outline-none"
+                    >
+                      {["all", "planned", "doing", "done", "blocked", "failed"].map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1">
+                  {filteredActivityEntries.length ? (
+                    filteredActivityEntries.map((entry) => (
+                      <article
+                        key={entry.id}
+                        className={`rounded-xl border p-2 text-xs ${
+                          shouldHighlightLogoutActivity(entry)
+                            ? "border-amber-300/35 bg-amber-500/10"
+                            : "border-white/10 bg-white/[0.03]"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-[10px] text-slate-400">
+                            +{formatActivityElapsed(entry.elapsedMs)}
+                          </span>
+                          <span className="font-mono text-[10px] text-slate-500">
+                            {formatActivityTimestamp(entry.ts)}
+                          </span>
+                          <span className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] text-slate-200">
+                            {entry.phase}
+                          </span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${activityStatusTone(entry.status)}`}>
+                            {entry.status}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-slate-100">{entry.message}</p>
+                        {entry.details ? (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer text-[11px] text-slate-400">Details</summary>
+                            <pre className="mt-1 overflow-auto rounded-lg border border-white/10 bg-slate-900/60 p-2 text-[10px] text-slate-300">
+                              {JSON.stringify(entry.details, null, 2)}
+                            </pre>
+                          </details>
+                        ) : null}
+                      </article>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-3 py-4 text-xs text-slate-500">
+                      No activity entries yet.
+                    </div>
+                  )}
+                </div>
+              </section>
+              ) : null}
+
+              {isDetailVisible("currentCase") ? (
+              <section className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+                <div className="flex items-center justify-between gap-3">
                   <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">Currently Running</h2>
                   <button
                     type="button"
@@ -947,15 +1293,20 @@ export default function RunConsole({
                   </button>
                 </div>
                 <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs">
-                  <p className="font-semibold text-white">{currentCase?.caseKind ?? "No active case"}</p>
-                  <p className="mt-1 text-slate-400">device: {currentCase?.deviceLabel ?? "-"}</p>
-                  <p className="mt-1 truncate text-slate-400">page: {currentCase?.pageUrl ?? session.currentUrl ?? "-"}</p>
+                  <p className="font-semibold text-white">{currentCaseTitle}</p>
+                  <p className="mt-1 text-slate-400">device: {currentCaseDevice}</p>
+                  <p className="mt-1 truncate text-slate-400">page: {currentCasePage}</p>
                   <p className="mt-1 text-slate-500">step: {session.currentStep ?? "-"}</p>
+                  <p className="mt-2 rounded-md border border-white/10 bg-slate-900/60 px-2 py-1 text-slate-300">
+                    next: {currentCaseNextAction}
+                  </p>
                 </div>
               </section>
+              ) : null}
 
-              <DeviceSummary entries={deviceSummary} />
+              {isDetailVisible("devices") ? <DeviceSummary entries={deviceSummary} /> : null}
 
+              {isDetailVisible("failures") ? (
               <section className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-200">Failures</h2>
@@ -979,7 +1330,7 @@ export default function RunConsole({
                         </span>
                         {failure.grouped ? (
                           <span className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-2 py-1 font-semibold text-[10px] text-cyan-100">
-                            {failure.occurrenceCount} devices
+                            {failure.affectedDeviceCount ?? failure.devices.length ?? 1} devices
                           </span>
                         ) : (
                           <span className="rounded-full border border-cyan-300/20 px-2 py-1 font-semibold text-[10px] text-cyan-100">
@@ -998,7 +1349,7 @@ export default function RunConsole({
                       <p className="mt-1 truncate text-slate-400">{failure.pageUrl || "-"}</p>
                       <p className="mt-1 text-[11px] text-slate-500">Check: {failure.testcaseTitle || failure.testcaseId || failure.issueType}</p>
                       <p className="mt-1 text-[11px] text-slate-500">
-                        Affected devices: {failure.occurrenceCount}
+                        Affected devices: {failure.affectedDeviceCount ?? failure.devices.length ?? 1}
                       </p>
                       {failure.devices?.length ? (
                         <p className="mt-1 text-[11px] text-slate-400">
@@ -1007,6 +1358,11 @@ export default function RunConsole({
                             .map((device) => device.deviceLabel || device.viewportLabel)
                             .join(", ")}
                           {failure.devices.length > 3 ? ` +${failure.devices.length - 3} more` : ""}
+                        </p>
+                      ) : null}
+                      {failure.grouped && failure.sourceIssueTypes?.length > 1 ? (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Merged issue types: {failure.sourceIssueTypes.join(", ")}
                         </p>
                       ) : null}
                         </>
@@ -1046,8 +1402,9 @@ export default function RunConsole({
                   ) : null}
                 </div>
               </section>
+              ) : null}
 
-              {mode === "uiux" ? (
+              {mode === "uiux" && isDetailVisible("advisories") ? (
                 <section className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200">
@@ -1080,6 +1437,32 @@ export default function RunConsole({
                 </section>
               ) : null}
 
+              {mode === "uiux" && uiuxHandbookSummary && isDetailVisible("handbook") ? (
+                <section className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-200">
+                      Handbook Coverage
+                    </h2>
+                    <span className="font-mono text-xs text-slate-500">{uiuxHandbookSummary.total ?? 0}</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-emerald-100">
+                      Pass: {uiuxHandbookSummary.pass ?? 0}
+                    </div>
+                    <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-2 py-1 text-rose-100">
+                      Fail: {uiuxHandbookSummary.fail ?? 0}
+                    </div>
+                    <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-amber-100">
+                      Warn: {uiuxHandbookSummary.warn ?? 0}
+                    </div>
+                    <div className="rounded-lg border border-slate-400/30 bg-slate-700/30 px-2 py-1 text-slate-200">
+                      Info: {uiuxHandbookSummary.info ?? 0}
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+
+              {isDetailVisible("summary") ? (
               <section className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
                 <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">Summary</h2>
                 <p className="mt-2 text-xs leading-5 text-slate-300">{deterministicSummary}</p>
@@ -1089,8 +1472,30 @@ export default function RunConsole({
                   </div>
                 ) : null}
               </section>
+              ) : null}
 
-              <ArtifactsList artifacts={mergedReport?.artifacts ?? session.artifactIndex ?? {}} apiBase={apiBase} />
+              {mode === "functional" && websiteDocumentation?.markdown && isDetailVisible("websiteDocs") ? (
+                <section className="rounded-2xl border border-cyan-300/20 bg-slate-950/70 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100">
+                      Website Docs
+                    </h2>
+                    <span className="rounded-full border border-white/10 px-2 py-1 font-mono text-[11px] text-slate-300">
+                      pages {websiteDocumentation.pages?.length ?? 0}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">
+                    Auto-generated from functional exploration, forms, navigation, validations, and observed outcomes.
+                  </p>
+                  <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl border border-white/10 bg-slate-900/70 p-3 text-[11px] leading-5 text-slate-200">
+                    {websiteDocumentation.markdown}
+                  </pre>
+                </section>
+              ) : null}
+
+              {isDetailVisible("artifacts") ? (
+                <ArtifactsList artifacts={mergedReport?.artifacts ?? session.artifactIndex ?? {}} apiBase={apiBase} />
+              ) : null}
             </aside>
           </div>
         </main>
@@ -1110,6 +1515,22 @@ export default function RunConsole({
         onClose={() => setEvidenceViewerOpen(false)}
         failure={selectedFailure}
         apiBase={apiBase}
+      />
+      <FormAssistModal
+        open={showFormAssistModal}
+        formAssist={formAssist}
+        onSubmitGroup={submitFunctionalForm}
+        onSkipGroup={skipFunctionalForm}
+        onAutoGroup={autoFunctionalForm}
+        onUpdateDescription={updateFunctionalFormDescription}
+        onSkipAll={skipAllFunctionalForms}
+        onAutoAll={autoAllFunctionalForms}
+      />
+      <VerificationAssistModal
+        open={showVerificationAssistModal}
+        verificationAssist={verificationAssist}
+        onDecision={resolveVerification}
+        onDecisionAll={resolveAllVerifications}
       />
     </div>
   );

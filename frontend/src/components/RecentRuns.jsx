@@ -1,3 +1,5 @@
+import { formatRunTargetForDisplay } from "../lib/dashboardUi";
+
 function statusTone(status = "queued") {
   if (status === "passed") {
     return "bg-emerald-500/20 text-emerald-100 border-emerald-400/30";
@@ -63,7 +65,9 @@ export default function RecentRuns({ sessions = [], onSelect }) {
                     </span>
                   </td>
                   <td className="px-3 py-3 font-mono text-xs text-cyan-100">{session.runConfig?.testMode ?? "default"}</td>
-                  <td className="max-w-[300px] truncate px-3 py-3 text-xs text-slate-300">{session.startUrl}</td>
+                  <td className="max-w-[260px] truncate px-3 py-3 text-xs text-slate-300" title={session.startUrl}>
+                    {formatRunTargetForDisplay(session.startUrl)}
+                  </td>
                   <td className="px-3 py-3 text-xs text-slate-500">{formatDate(session.updatedAt ?? session.createdAt)}</td>
                 </tr>
               ))}

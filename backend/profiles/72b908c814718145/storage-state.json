@@ -2,10 +2,10 @@
   "cookies": [
     {
       "name": "lrm_session",
-      "value": "%7B%22name%22%3A%22Kaushik%22%2C%22role%22%3A%22OWNER%22%2C%22accessKey%22%3A%22LRM-OWN-K9X2%22%2C%22userId%22%3A%2256d9bf6b-5e30-43bd-aa8c-685fb5fd0574%22%2C%22sessionId%22%3A%22e16d9f30-0c16-43c4-8f5b-bc64dfb3f2b2%22%7D.bgLB8WCyjNHfiZDnS5SleiPFZb_Nx6mlYsT9YO5oxNA",
+      "value": "%7B%22name%22%3A%22Mk%22%2C%22role%22%3A%22VIDEOGRAPHER%22%2C%22accessKey%22%3A%22LRM-VG-A512%22%2C%22userId%22%3A%22c7f30d52-1705-493b-abe8-b9e7e1bcf7ad%22%2C%22sessionId%22%3A%2249abcaa9-ca06-4b74-b2c7-f4996162bb50%22%7D.qfz__UwZv1haKkzHyz_Uug3Ao51dYkPmHUj48PIylis",
       "domain": "lrm-main.vercel.app",
       "path": "/",
-      "expires": 1773168589.119295,
+      "expires": 1773358230.828595,
       "httpOnly": true,
       "secure": true,
       "sameSite": "Strict"

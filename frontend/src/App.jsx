@@ -6,17 +6,29 @@ import RunConsole from "./pages/RunConsole";
 import { isRunActive } from "./lib/runState";
 import { API_BASE_URL, SOCKET_BASE_URL } from "./services/constants";
 import {
+  autoAllSessionForms,
+  autoSessionFormGroup,
+  getApiHealth,
   getSession,
   getSessionReport,
   listSessions,
+  skipAllSessionForms,
   skipSessionAuth,
+  skipSessionFormGroup,
   startSession,
+  stopAllSessions,
   stopSession,
-  submitSessionCredentials,
-  submitSessionOtp
+  submitSessionFormGroup,
+  submitVerificationDecision,
+  submitVerificationDecisionAll,
+  submitSessionInputFields,
+  submitSessionOtp,
+  updateSessionFormGroupDescription
 } from "./services/sessionsService";
 
 const API_BASE = API_BASE_URL;
+const TEST_CASE_BUFFER_LIMIT = 5000;
+const AGENT_ACTIVITY_BUFFER_LIMIT = 300;
 
 const socket = io(SOCKET_BASE_URL, {
   transports: ["websocket"],
@@ -59,9 +71,29 @@ function patchSessionEntry(existing = [], sessionId, patch = {}) {
   );
 }
 
+function appendAgentActivityEntry(existing = [], sessionId, event) {
+  if (!sessionId || !event || typeof event !== "object") {
+    return existing;
+  }
+  return sortSessionsByRecent(
+    existing.map((entry) => {
+      if (entry.id !== sessionId) {
+        return entry;
+      }
+      const current = Array.isArray(entry.agentActivity) ? entry.agentActivity : [];
+      return {
+        ...entry,
+        agentActivity: [...current, event].slice(-AGENT_ACTIVITY_BUFFER_LIMIT)
+      };
+    })
+  );
+}
+
 export default function App() {
   const [sessions, setSessions] = useState([]);
   const [socketConnected, setSocketConnected] = useState(socket.connected);
+  const [backendHealth, setBackendHealth] = useState(null);
+  const [backendHealthError, setBackendHealthError] = useState("");
 
   const refreshSessions = useCallback(async () => {
     const payload = await listSessions();
@@ -98,15 +130,27 @@ export default function App() {
     return report;
   }, []);
 
+  const refreshBackendHealth = useCallback(async () => {
+    try {
+      const payload = await getApiHealth();
+      setBackendHealth(payload);
+      setBackendHealthError("");
+      return payload;
+    } catch (error) {
+      setBackendHealthError(error?.message ?? "Unable to read backend runtime metadata.");
+      return null;
+    }
+  }, []);
+
   const startRun = useCallback(async (body) => {
     const session = await startSession(body);
     setSessions((current) => upsertSessionEntry(current, session));
     return session;
   }, []);
 
-  const submitAuthCredentials = useCallback(async (sessionId, payload) => {
+  const submitAuthInputFields = useCallback(async (sessionId, payload) => {
     try {
-      const result = await submitSessionCredentials(sessionId, payload);
+      const result = await submitSessionInputFields(sessionId, payload);
       if (result?.authAssist) {
         setSessions((current) =>
           patchSessionEntry(current, sessionId, {
@@ -173,6 +217,80 @@ export default function App() {
     }
   }, []);
 
+  const applyFormAssistPatch = useCallback((sessionId, payload = {}) => {
+    if (!sessionId) {
+      return;
+    }
+    if (payload?.session?.id) {
+      setSessions((current) => upsertSessionEntry(current, payload.session));
+      return;
+    }
+    const patch = {};
+    if (payload?.formAssist !== undefined) {
+      patch.formAssist = payload.formAssist;
+    }
+    if (payload?.verificationAssist !== undefined) {
+      patch.verificationAssist = payload.verificationAssist;
+    }
+    if (payload?.status !== undefined) {
+      patch.status = payload.status;
+    }
+    if (Object.keys(patch).length === 0) {
+      return;
+    }
+    setSessions((current) =>
+      patchSessionEntry(current, sessionId, patch)
+    );
+  }, []);
+
+  const submitFormGroup = useCallback(async (sessionId, groupId, payload = {}) => {
+    const response = await submitSessionFormGroup(sessionId, groupId, payload);
+    applyFormAssistPatch(sessionId, response);
+    return response;
+  }, [applyFormAssistPatch]);
+
+  const skipFormGroup = useCallback(async (sessionId, groupId, payload = {}) => {
+    const response = await skipSessionFormGroup(sessionId, groupId, payload);
+    applyFormAssistPatch(sessionId, response);
+    return response;
+  }, [applyFormAssistPatch]);
+
+  const autoFormGroup = useCallback(async (sessionId, groupId, payload = {}) => {
+    const response = await autoSessionFormGroup(sessionId, groupId, payload);
+    applyFormAssistPatch(sessionId, response);
+    return response;
+  }, [applyFormAssistPatch]);
+
+  const updateFormGroupDescription = useCallback(async (sessionId, groupId, payload = {}) => {
+    const response = await updateSessionFormGroupDescription(sessionId, groupId, payload);
+    applyFormAssistPatch(sessionId, response);
+    return response;
+  }, [applyFormAssistPatch]);
+
+  const skipAllForms = useCallback(async (sessionId, payload = {}) => {
+    const response = await skipAllSessionForms(sessionId, payload);
+    applyFormAssistPatch(sessionId, response);
+    return response;
+  }, [applyFormAssistPatch]);
+
+  const autoAllForms = useCallback(async (sessionId, payload = {}) => {
+    const response = await autoAllSessionForms(sessionId, payload);
+    applyFormAssistPatch(sessionId, response);
+    return response;
+  }, [applyFormAssistPatch]);
+
+  const resolveVerificationPrompt = useCallback(async (sessionId, promptId, payload = {}) => {
+    const response = await submitVerificationDecision(sessionId, promptId, payload);
+    applyFormAssistPatch(sessionId, response);
+    return response;
+  }, [applyFormAssistPatch]);
+
+  const resolveAllVerificationPrompts = useCallback(async (sessionId, payload = {}) => {
+    const response = await submitVerificationDecisionAll(sessionId, payload);
+    applyFormAssistPatch(sessionId, response);
+    return response;
+  }, [applyFormAssistPatch]);
+
   const stopRun = useCallback(async (sessionId) => {
     const result = await stopSession(sessionId);
     if (result?.session) {
@@ -188,17 +306,44 @@ export default function App() {
     return result;
   }, []);
 
+  const stopAllRuns = useCallback(async () => {
+    const result = await stopAllSessions();
+    const requestedSessionIds = Array.isArray(result?.requestedSessionIds) ? result.requestedSessionIds : [];
+    if (requestedSessionIds.length) {
+      setSessions((current) =>
+        sortSessionsByRecent(
+          current.map((entry) =>
+            requestedSessionIds.includes(entry.id) && isRunActive(entry.status)
+              ? {
+                  ...entry,
+                  status: "cancelling",
+                  summary: "Run stop requested by user."
+                }
+              : entry
+          )
+        )
+      );
+    }
+    refreshSessions().catch(() => null);
+    return result;
+  }, [refreshSessions]);
+
   useEffect(() => {
     refreshSessions().catch(() => null);
   }, [refreshSessions]);
 
   useEffect(() => {
+    refreshBackendHealth().catch(() => null);
+  }, [refreshBackendHealth]);
+
+  useEffect(() => {
     const refreshTimer = setInterval(() => {
       refreshSessions().catch(() => null);
+      refreshBackendHealth().catch(() => null);
     }, 30_000);
 
     return () => clearInterval(refreshTimer);
-  }, [refreshSessions]);
+  }, [refreshBackendHealth, refreshSessions]);
 
   useEffect(() => {
     function handleSocketConnect() {
@@ -276,7 +421,7 @@ export default function App() {
                 ...(entry.testCaseStats ?? {}),
                 ...(payload.stats ?? {})
               },
-              testCases: testCases.slice(-500)
+              testCases: testCases.slice(-TEST_CASE_BUFFER_LIMIT)
             };
           })
         )
@@ -290,6 +435,15 @@ export default function App() {
       }
     }
 
+    function handleAgentActivity(payload) {
+      const sessionId = payload?.sessionId;
+      const event = payload?.event;
+      if (!sessionId || !event) {
+        return;
+      }
+      setSessions((current) => appendAgentActivityEntry(current, sessionId, event));
+    }
+
     socket.on("connect", handleSocketConnect);
     socket.on("disconnect", handleSocketDisconnect);
     socket.on("session.created", handleSessionPayload);
@@ -301,6 +455,7 @@ export default function App() {
     socket.on("ui-update", handleUiUpdate);
     socket.on("testcase:stats", handleTestCaseStats);
     socket.on("testcase:event", handleTestCaseEvent);
+    socket.on("agent.activity", handleAgentActivity);
 
     return () => {
       socket.off("connect", handleSocketConnect);
@@ -314,6 +469,7 @@ export default function App() {
       socket.off("ui-update", handleUiUpdate);
       socket.off("testcase:stats", handleTestCaseStats);
       socket.off("testcase:event", handleTestCaseEvent);
+      socket.off("agent.activity", handleAgentActivity);
     };
   }, [fetchReport, fetchSession]);
 
@@ -331,7 +487,11 @@ export default function App() {
             sessions={sessions}
             socketConnected={socketConnected}
             activeSessionsCount={activeSessionsCount}
+            apiBase={API_BASE}
+            backendHealth={backendHealth}
+            backendHealthError={backendHealthError}
             onLaunch={startRun}
+            onStopAllActiveRuns={stopAllRuns}
           />
         }
       />
@@ -344,9 +504,17 @@ export default function App() {
             socketConnected={socketConnected}
             fetchSession={fetchSession}
             fetchReport={fetchReport}
-            submitAuthCredentials={submitAuthCredentials}
+            submitAuthInputFields={submitAuthInputFields}
             submitAuthOtp={submitAuthOtp}
             skipAuthCredentials={skipAuthCredentials}
+            submitFormGroup={submitFormGroup}
+            skipFormGroup={skipFormGroup}
+            autoFormGroup={autoFormGroup}
+            updateFormGroupDescription={updateFormGroupDescription}
+            skipAllForms={skipAllForms}
+            autoAllForms={autoAllForms}
+            resolveVerificationPrompt={resolveVerificationPrompt}
+            resolveAllVerificationPrompts={resolveAllVerificationPrompts}
             stopRun={stopRun}
           />
         }

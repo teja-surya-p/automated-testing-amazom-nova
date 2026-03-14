@@ -7,7 +7,16 @@ export class UiuxRuleRunner {
   }
 
   runAll(context = {}) {
+    const activeCheckSet = context.activeCheckIds instanceof Set
+      ? context.activeCheckIds
+      : (Array.isArray(context.activeCheckIds) && context.activeCheckIds.length > 0
+        ? new Set(context.activeCheckIds.map((value) => String(value)))
+        : null);
+
     return this.testCases.flatMap((testCase) => {
+      if (activeCheckSet && !activeCheckSet.has(testCase.id)) {
+        return [];
+      }
       const result = testCase.detector(context);
       if (!result) {
         return [];

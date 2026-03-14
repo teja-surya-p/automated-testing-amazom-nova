@@ -1,6 +1,6 @@
 import { createId, nowIso } from "../../lib/utils.js";
 
-export const TEST_CASE_BUFFER_LIMIT = 500;
+export const TEST_CASE_BUFFER_LIMIT = 5000;
 
 const TERMINAL_STATUSES = new Set(["passed", "failed", "skipped"]);
 

@@ -73,6 +73,32 @@ function createOrchestratorHarness() {
   };
 }
 
+test("resume target resolution avoids auth/logout URLs and prefers authenticated destination", () => {
+  const { orchestrator, sessionStore, session } = createOrchestratorHarness();
+  sessionStore.patchSession(session.id, {
+    startUrl: "http://localhost:3113/login",
+    currentUrl: "http://localhost:3113/login",
+    authAssist: {
+      state: "awaiting_credentials",
+      code: "LOGIN_REQUIRED",
+      resumeTargetUrl: "http://localhost:3113/logout"
+    },
+    observations: [
+      {
+        url: "http://localhost:3113/dashboard",
+        step: 1
+      },
+      {
+        url: "http://localhost:3113/logout",
+        step: 2
+      }
+    ]
+  });
+
+  const resolved = orchestrator.resolveResumeTargetUrl(session.id, "http://localhost:3113/logout");
+  assert.equal(resolved, "http://localhost:3113/dashboard");
+});
+
 test("credential submission transitions to awaiting_otp without persisting secrets", async () => {
   const { orchestrator, sessionStore, session } = createOrchestratorHarness();
   let probeCallCount = 0;
@@ -145,6 +171,227 @@ test("credential submission transitions to awaiting_otp without persisting secre
   assert.equal(stored.authAssist?.form?.otpFieldDetected, true);
   assert.equal(JSON.stringify(stored).includes("super-secret-password"), false);
   assert.equal(JSON.stringify(stored).includes("qa-user@example.com"), false);
+});
+
+test("dynamic input-fields submission uses detected field keys and returns input-field state", async () => {
+  const { orchestrator, sessionStore, session } = createOrchestratorHarness();
+  sessionStore.patchSession(session.id, {
+    status: "login-assist",
+    authAssist: {
+      state: "awaiting_input_fields",
+      code: "LOGIN_REQUIRED",
+      reason: "Login wall detected.",
+      site: "example.com",
+      pageUrl: "https://example.com/login",
+      loginRequired: true,
+      form: {
+        visibleStep: "credentials",
+        identifierFieldDetected: true,
+        passwordFieldDetected: true,
+        inputFields: [
+          {
+            key: "access_key",
+            label: "Access Key",
+            placeholder: "Enter access key",
+            kind: "text",
+            secret: false,
+            required: true,
+            position: 1
+          },
+          {
+            key: "password",
+            label: "Password",
+            placeholder: "Enter password",
+            kind: "password",
+            secret: true,
+            required: true,
+            position: 2
+          }
+        ],
+        submitAction: {
+          label: "Sign In",
+          type: "submit"
+        }
+      }
+    }
+  });
+
+  let receivedInputFields = null;
+  orchestrator.activeBrowserSessions.set(session.id, {
+    async collectAuthFormProbe() {
+      return {
+        pageUrl: "https://example.com/login",
+        site: "example.com",
+        loginWallDetected: true,
+        otpChallengeDetected: false,
+        captchaDetected: false,
+        usernameFieldDetected: false,
+        identifierFieldDetected: true,
+        passwordFieldDetected: true,
+        otpFieldDetected: false,
+        submitControlDetected: true,
+        identifierFieldVisibleCount: 1,
+        identifierLabelCandidates: ["Access Key"],
+        visibleStep: "credentials",
+        inputFields: [
+          {
+            key: "access_key",
+            label: "Access Key",
+            placeholder: "Enter access key",
+            kind: "text",
+            secret: false,
+            required: true,
+            position: 1
+          },
+          {
+            key: "password",
+            label: "Password",
+            placeholder: "Enter password",
+            kind: "password",
+            secret: true,
+            required: true,
+            position: 2
+          }
+        ],
+        submitAction: {
+          label: "Sign In",
+          type: "submit"
+        },
+        reason: "Identifier and password fields are visible on the same step."
+      };
+    },
+    async submitAuthInputFields({ inputFields }) {
+      receivedInputFields = inputFields;
+      return {
+        success: true,
+        code: "INPUT_FIELDS_SUBMITTED",
+        reason: "Input fields were submitted to the active login form.",
+        authenticated: false,
+        inputFieldsConsumed: true,
+        fillExecutionAttempted: true,
+        fillExecutionSucceeded: true,
+        fieldTargetsResolvedCount: 2,
+        fieldTargetsFilledCount: 2,
+        fieldTargetsVerifiedCount: 2,
+        focusedFieldKeys: ["access_key", "password"],
+        submitTriggered: true,
+        submitControlResolved: true,
+        submitControlType: "control-click",
+        submitControlDetected: true,
+        targetedPageUrl: "https://example.com/login",
+        targetedFrameUrl: "https://example.com/login",
+        targetedFrameType: "page",
+        perField: [
+          {
+            key: "access_key",
+            resolved: true,
+            actionable: true,
+            fillAttempted: true,
+            filled: true,
+            verified: true,
+            valuePresentAfterFill: true,
+            valueLengthAfterFill: 14
+          },
+          {
+            key: "password",
+            resolved: true,
+            actionable: true,
+            fillAttempted: true,
+            filled: true,
+            verified: true,
+            valuePresentAfterFill: true,
+            valueLengthAfterFill: 21
+          }
+        ],
+        viewerFrameCapturedAfterFill: true,
+        viewerFrameCapturedAfterSubmit: true,
+        viewerSnapshots: {
+          afterFill: {
+            screenshotBase64: "ZmFrZS1maWxsLWZyYW1l",
+            url: "https://example.com/login",
+            title: "Sign In"
+          },
+          afterSubmit: {
+            screenshotBase64: "ZmFrZS1zdWJtaXQtZnJhbWU=",
+            url: "https://example.com/login/challenge",
+            title: "Sign In"
+          }
+        },
+        postSubmitUrlChanged: true,
+        postSubmitUrl: "https://example.com/login/challenge",
+        probe: {
+          pageUrl: "https://example.com/login/challenge",
+          site: "example.com",
+          loginWallDetected: true,
+          otpChallengeDetected: false,
+          captchaDetected: false,
+          usernameFieldDetected: false,
+          identifierFieldDetected: true,
+          passwordFieldDetected: true,
+          otpFieldDetected: false,
+          submitControlDetected: true,
+          identifierFieldVisibleCount: 1,
+          identifierLabelCandidates: ["Access Key"],
+          visibleStep: "credentials",
+          inputFields: [
+            {
+              key: "access_key",
+              label: "Access Key",
+              placeholder: "Enter access key",
+              kind: "text",
+              secret: false,
+              required: true,
+              position: 1
+            },
+            {
+              key: "password",
+              label: "Password",
+              placeholder: "Enter password",
+              kind: "password",
+              secret: true,
+              required: true,
+              position: 2
+            }
+          ],
+          submitAction: {
+            label: "Sign In",
+            type: "submit"
+          },
+          reason: "Identifier and password fields are visible on the same step."
+        }
+      };
+    },
+    async submitAuthCredentials() {
+      throw new Error("legacy submitAuthCredentials should not be used for input-fields payloads");
+    },
+    async persistStorageState() {
+      return true;
+    }
+  });
+
+  const result = await orchestrator.submitSessionInputFields(session.id, {
+    inputFields: {
+      access_key: "access-key-123",
+      password: "super-secret-password"
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.code, "AUTH_STEP_ADVANCED");
+  assert.equal(result.authAssist?.state, "auth_step_advanced");
+  assert.equal(receivedInputFields?.access_key, "access-key-123");
+  assert.equal(receivedInputFields?.password, "super-secret-password");
+  assert.equal(result.authAssist?.runtime?.inputFieldsConsumed, true);
+  assert.equal(result.authAssist?.runtime?.fillExecutionSucceeded, true);
+  assert.equal(result.authAssist?.runtime?.fieldTargetsVerifiedCount, 2);
+  assert.equal(result.authAssist?.runtime?.targetedFrameType, "page");
+  assert.equal(result.authAssist?.runtime?.viewerFrameCapturedAfterFill, true);
+  assert.equal(result.authAssist?.runtime?.viewerFrameCapturedAfterSubmit, true);
+  assert.equal(result.authAssist?.runtime?.perField?.length, 2);
+  assert.deepEqual(result.authAssist?.runtime?.focusedFieldKeys, ["access_key", "password"]);
+  const storedSession = sessionStore.getSession(session.id);
+  assert.match(String(storedSession?.frame ?? ""), /^data:image\/png;base64,/);
+  assert.equal(JSON.stringify(sessionStore.getSession(session.id)).includes("super-secret-password"), false);
 });
 
 test("multi-step auth advances from username to password without INVALID_CREDENTIALS", async () => {
@@ -225,7 +472,7 @@ test("multi-step auth advances from username to password without INVALID_CREDENT
   assert.equal(stored.authAssist?.code, "AUTH_STEP_ADVANCED");
 });
 
-test("single-step custom identifier + password transitions to submitting_credentials while auth settles", async () => {
+test("single-step custom identifier + password transitions to auth_step_advanced while auth settles", async () => {
   const { orchestrator, sessionStore, session } = createOrchestratorHarness();
   let submitCallCount = 0;
   let receivedCredentials = null;
@@ -259,9 +506,11 @@ test("single-step custom identifier + password transitions to submitting_credent
         authenticated: false,
         submitTriggered: true,
         submitControlType: "control-click",
+        postSubmitUrlChanged: true,
+        postSubmitUrl: "https://example.com/login/challenge",
         stepAdvanced: false,
         probe: {
-          pageUrl: "https://example.com/login",
+          pageUrl: "https://example.com/login/challenge",
           site: "example.com",
           loginWallDetected: true,
           otpChallengeDetected: false,
@@ -290,8 +539,8 @@ test("single-step custom identifier + password transitions to submitting_credent
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.code, "CREDENTIALS_SUBMITTED");
-  assert.equal(result.authAssist?.state, "submitting_credentials");
+  assert.equal(result.code, "AUTH_STEP_ADVANCED");
+  assert.equal(result.authAssist?.state, "auth_step_advanced");
   assert.equal(result.authAssist?.submitAttempted, true);
   assert.equal(submitCallCount, 1);
   assert.equal(result.authAssist?.form?.identifierFieldDetected, true);
@@ -305,7 +554,7 @@ test("single-step custom identifier + password transitions to submitting_credent
   assert.equal(receivedCredentials?.password, "super-secret-password");
 
   const stored = sessionStore.getSession(session.id);
-  assert.equal(stored.authAssist?.state, "submitting_credentials");
+  assert.equal(stored.authAssist?.state, "auth_step_advanced");
   assert.equal(stored.authAssist?.form?.identifierFieldDetected, true);
   assert.equal(stored.authAssist?.submitAttempted, true);
   assert.equal(stored.authAssist?.runtime?.submitTriggered, true);
@@ -410,6 +659,108 @@ test("credential submission returns AUTH_SUBMIT_NOT_TRIGGERED instead of stale L
   const stored = sessionStore.getSession(session.id);
   assert.equal(stored.authAssist?.code, "AUTH_SUBMIT_NOT_TRIGGERED");
   assert.equal(stored.authAssist?.runtime?.submitTriggered, false);
+});
+
+test("credential submission uses AUTH_PENDING_TRANSITION when submit is triggered without deterministic transition", async () => {
+  const { orchestrator, sessionStore, session } = createOrchestratorHarness();
+  sessionStore.patchSession(session.id, {
+    status: "login-assist",
+    authAssist: {
+      state: "awaiting_credentials",
+      code: "LOGIN_REQUIRED",
+      reason: "Login wall detected.",
+      site: "example.com",
+      pageUrl: "https://example.com/login",
+      loginRequired: true,
+      form: {
+        identifierFieldDetected: true,
+        passwordFieldDetected: true,
+        otpFieldDetected: false,
+        submitControlDetected: true
+      }
+    }
+  });
+
+  orchestrator.activeBrowserSessions.set(session.id, {
+    async collectAuthFormProbe() {
+      return {
+        pageUrl: "https://example.com/login",
+        site: "example.com",
+        loginWallDetected: true,
+        otpChallengeDetected: false,
+        captchaDetected: false,
+        usernameFieldDetected: false,
+        identifierFieldDetected: true,
+        passwordFieldDetected: true,
+        otpFieldDetected: false,
+        submitControlDetected: true,
+        visibleStep: "credentials",
+        reason: "Identifier and password fields are visible on the same step."
+      };
+    },
+    async submitAuthCredentials() {
+      return {
+        success: true,
+        code: "CREDENTIALS_SUBMITTED",
+        reason: "Credentials submitted.",
+        submitTriggered: true,
+        identifierFilled: true,
+        passwordFilled: true,
+        postSubmitUrlChanged: false,
+        probe: {
+          pageUrl: "https://example.com/login",
+          site: "example.com",
+          loginWallDetected: true,
+          otpChallengeDetected: false,
+          captchaDetected: false,
+          usernameFieldDetected: false,
+          identifierFieldDetected: true,
+          passwordFieldDetected: true,
+          otpFieldDetected: false,
+          submitControlDetected: true,
+          visibleStep: "credentials",
+          reason: "Identifier and password fields are visible on the same step."
+        }
+      };
+    },
+    async confirmAuthenticatedSession() {
+      return {
+        state: "awaiting_credentials",
+        code: "LOGIN_REQUIRED",
+        reason: "Identifier and password fields are visible on the same step.",
+        probe: {
+          pageUrl: "https://example.com/login",
+          site: "example.com",
+          loginWallDetected: true,
+          otpChallengeDetected: false,
+          captchaDetected: false,
+          usernameFieldDetected: false,
+          identifierFieldDetected: true,
+          passwordFieldDetected: true,
+          otpFieldDetected: false,
+          submitControlDetected: true,
+          visibleStep: "credentials",
+          reason: "Identifier and password fields are visible on the same step."
+        }
+      };
+    }
+  });
+
+  const result = await orchestrator.submitSessionCredentials(session.id, {
+    username: "access-key-123",
+    password: "super-secret-password"
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.code, "AUTH_PENDING_TRANSITION");
+  assert.notEqual(result.code, "AUTH_SUBMIT_NOT_TRIGGERED");
+  assert.equal(result.authAssist?.state, "submitting_credentials");
+  assert.equal(result.authAssist?.runtime?.submitTriggered, true);
+
+  const stored = sessionStore.getSession(session.id);
+  assert.equal(stored.authAssist?.code, "AUTH_PENDING_TRANSITION");
+  assert.equal(stored.authAssist?.state, "submitting_credentials");
+  assert.equal(stored.authAssist?.runtime?.submitTriggered, true);
 });
 
 test("credential submission confirms authenticated state and preserves resume target metadata", async () => {
@@ -785,6 +1136,44 @@ test("handleLoginAssist resumes when authenticated signal is published by creden
   }
 });
 
+test("handleLoginAssist does not park run when probe has no credential-field evidence", async () => {
+  const { orchestrator, sessionStore, session } = createOrchestratorHarness();
+
+  const resumed = await orchestrator.handleLoginAssist({
+    sessionId: session.id,
+    browserSession: {
+      async collectAuthFormProbe() {
+        return {
+          pageUrl: "https://www.w3schools.com/",
+          site: "www.w3schools.com",
+          loginWallDetected: true,
+          loginWallStrength: "medium",
+          otpChallengeDetected: false,
+          captchaDetected: false,
+          usernameFieldDetected: false,
+          identifierFieldDetected: false,
+          passwordFieldDetected: false,
+          otpFieldDetected: false,
+          submitControlDetected: true,
+          visibleStep: "credentials",
+          inputFields: [],
+          reason: "Auth-like controls are visible, but credential fields are not confirmed."
+        };
+      },
+      async isAuthenticated() {
+        return false;
+      }
+    },
+    domain: "www.w3schools.com"
+  });
+
+  const updated = sessionStore.getSession(session.id);
+  assert.equal(resumed, true);
+  assert.equal(updated?.status, "running");
+  assert.equal(updated?.authAssist?.state, "running");
+  assert.equal(updated?.authAssist?.code, "AUTH_NOT_REQUIRED");
+});
+
 test("active login-assist loop consumes credential submission and resumes run", async () => {
   const originalPollMs = config.loginAssistPollMs;
   config.loginAssistPollMs = 1;
@@ -1139,7 +1528,7 @@ test("report exposes only safe auth assist metadata", () => {
   assert.equal("otp" in (report.authAssist ?? {}), false);
 });
 
-test("uiux login assist triggers from snapshot credential form when probe is weak", async () => {
+test("uiux login assist triggers from snapshot credential form when probe is unavailable", async () => {
   const { orchestrator, session } = createOrchestratorHarness();
   let loginAssistCalled = false;
   const originalHandleLoginAssist = orchestrator.handleLoginAssist.bind(orchestrator);
@@ -1155,18 +1544,7 @@ test("uiux login assist triggers from snapshot credential form when probe is wea
       sessionId: session.id,
       browserSession: {
         async collectAuthFormProbe() {
-          return {
-            pageUrl: "https://example.com/login",
-            site: "example.com",
-            loginWallDetected: false,
-            usernameFieldDetected: false,
-            identifierFieldDetected: false,
-            passwordFieldDetected: false,
-            otpFieldDetected: false,
-            submitControlDetected: false,
-            visibleStep: "unknown",
-            reason: "Weak probe result."
-          };
+          throw new Error("probe unavailable");
         },
         getCurrentUrl() {
           return "https://example.com/login";
@@ -1208,4 +1586,280 @@ test("uiux login assist triggers from snapshot credential form when probe is wea
   } finally {
     orchestrator.handleLoginAssist = originalHandleLoginAssist;
   }
+});
+
+test("uiux login assist ignores weak auth-intent pages without credential field evidence", async () => {
+  const { orchestrator, session } = createOrchestratorHarness();
+  let loginAssistCalled = false;
+  const originalHandleLoginAssist = orchestrator.handleLoginAssist.bind(orchestrator);
+  orchestrator.handleLoginAssist = async () => {
+    loginAssistCalled = true;
+    return false;
+  };
+
+  try {
+    const result = await orchestrator.maybeHandleUiuxLoginAssist({
+      sessionId: session.id,
+      browserSession: {
+        async collectAuthFormProbe() {
+          return {
+            pageUrl: "https://www.w3schools.com/",
+            site: "www.w3schools.com",
+            loginWallDetected: true,
+            loginWallStrength: "medium",
+            usernameFieldDetected: false,
+            identifierFieldDetected: false,
+            passwordFieldDetected: false,
+            otpFieldDetected: false,
+            otpChallengeDetected: false,
+            captchaDetected: false,
+            submitControlDetected: true,
+            visibleStep: "credentials",
+            reason: "Auth-like controls are visible, but credential fields are not confirmed."
+          };
+        },
+        getCurrentUrl() {
+          return "https://www.w3schools.com/";
+        }
+      },
+      currentUrl: "https://www.w3schools.com/",
+      snapshot: {
+        formControls: [],
+        interactive: [
+          {
+            elementId: "nav-signin",
+            tag: "button",
+            text: "Sign In",
+            inViewport: true,
+            disabled: false
+          }
+        ]
+      },
+      step: 1,
+      depth: 0
+    });
+
+    assert.equal(loginAssistCalled, false);
+    assert.equal(result.handled, false);
+    assert.equal(result.resumed, false);
+  } finally {
+    orchestrator.handleLoginAssist = originalHandleLoginAssist;
+  }
+});
+
+test("uiux login assist does not trigger from snapshot fallback without identifier evidence", async () => {
+  const { orchestrator, session } = createOrchestratorHarness();
+  let loginAssistCalled = false;
+  const originalHandleLoginAssist = orchestrator.handleLoginAssist.bind(orchestrator);
+  orchestrator.handleLoginAssist = async () => {
+    loginAssistCalled = true;
+    return false;
+  };
+
+  try {
+    const result = await orchestrator.maybeHandleUiuxLoginAssist({
+      sessionId: session.id,
+      browserSession: {
+        async collectAuthFormProbe() {
+          return {
+            pageUrl: "https://www.w3schools.com/",
+            site: "www.w3schools.com",
+            loginWallDetected: false,
+            loginWallStrength: "none",
+            usernameFieldDetected: false,
+            identifierFieldDetected: false,
+            passwordFieldDetected: false,
+            otpFieldDetected: false,
+            otpChallengeDetected: false,
+            captchaDetected: false,
+            submitControlDetected: true,
+            visibleStep: "unknown",
+            reason: "No strong authentication wall detected."
+          };
+        },
+        getCurrentUrl() {
+          return "https://www.w3schools.com/";
+        }
+      },
+      currentUrl: "https://www.w3schools.com/",
+      snapshot: {
+        formControls: [
+          {
+            tag: "input",
+            type: "search",
+            placeholder: "Search our tutorials, e.g. HTML",
+            inViewport: true
+          },
+          {
+            tag: "input",
+            type: "password",
+            placeholder: "Password",
+            inViewport: true
+          }
+        ],
+        interactive: [
+          {
+            elementId: "nav-signin",
+            tag: "button",
+            text: "Sign In",
+            inViewport: true,
+            disabled: false
+          }
+        ]
+      },
+      step: 1,
+      depth: 0
+    });
+
+    assert.equal(loginAssistCalled, false);
+    assert.equal(result.handled, false);
+    assert.equal(result.resumed, false);
+  } finally {
+    orchestrator.handleLoginAssist = originalHandleLoginAssist;
+  }
+});
+
+test("uiux login assist timeout enables continue-without-auth mode", async () => {
+  const { orchestrator, sessionStore, session } = createOrchestratorHarness();
+  const originalHandleLoginAssist = orchestrator.handleLoginAssist.bind(orchestrator);
+  orchestrator.handleLoginAssist = async () => {
+    sessionStore.patchSession(session.id, {
+      authAssist: {
+        state: "auth_failed",
+        code: "LOGIN_ASSIST_TIMEOUT",
+        reason: "Authentication assist timed out before login was completed."
+      }
+    });
+    return false;
+  };
+
+  try {
+    const result = await orchestrator.maybeHandleUiuxLoginAssist({
+      sessionId: session.id,
+      browserSession: {
+        async collectAuthFormProbe() {
+          return {
+            pageUrl: "https://example.com/login",
+            site: "example.com",
+            loginWallDetected: true,
+            usernameFieldDetected: true,
+            identifierFieldDetected: true,
+            passwordFieldDetected: true,
+            otpFieldDetected: false,
+            submitControlDetected: true,
+            visibleStep: "credentials",
+            reason: "Identifier and password fields are visible on the same step."
+          };
+        },
+        getCurrentUrl() {
+          return "https://example.com/login";
+        }
+      },
+      currentUrl: "https://example.com/login",
+      step: 1,
+      depth: 0
+    });
+
+    assert.equal(result.handled, true);
+    assert.equal(result.resumed, false);
+    const updated = sessionStore.getSession(session.id);
+    assert.equal(updated?.uiux?.continueWithoutAuth, true);
+  } finally {
+    orchestrator.handleLoginAssist = originalHandleLoginAssist;
+  }
+});
+
+test("uiux continue-without-auth mode bypasses blocking login-assist waits", async () => {
+  const { orchestrator, sessionStore, session } = createOrchestratorHarness();
+  sessionStore.patchSession(session.id, {
+    uiux: {
+      ...(sessionStore.getSession(session.id)?.uiux ?? {}),
+      continueWithoutAuth: true
+    }
+  });
+  let loginAssistCalled = false;
+  const originalHandleLoginAssist = orchestrator.handleLoginAssist.bind(orchestrator);
+  orchestrator.handleLoginAssist = async () => {
+    loginAssistCalled = true;
+    return false;
+  };
+
+  try {
+    const result = await orchestrator.maybeHandleUiuxLoginAssist({
+      sessionId: session.id,
+      browserSession: {
+        async collectAuthFormProbe() {
+          return {
+            pageUrl: "https://example.com/login",
+            site: "example.com",
+            loginWallDetected: true,
+            usernameFieldDetected: true,
+            identifierFieldDetected: true,
+            passwordFieldDetected: true,
+            otpFieldDetected: false,
+            submitControlDetected: true,
+            visibleStep: "credentials",
+            reason: "Identifier and password fields are visible on the same step."
+          };
+        },
+        getCurrentUrl() {
+          return "https://example.com/login";
+        }
+      },
+      currentUrl: "https://example.com/login",
+      step: 2,
+      depth: 0
+    });
+
+    assert.equal(loginAssistCalled, false);
+    assert.equal(result.handled, true);
+    assert.equal(result.resumed, false);
+  } finally {
+    orchestrator.handleLoginAssist = originalHandleLoginAssist;
+  }
+});
+
+test("session store derives safe auth debug payload when explicit debug is omitted", () => {
+  const sessionStore = new SessionStore();
+  const session = sessionStore.createSession({
+    goal: "auth debug payload smoke",
+    startUrl: "https://example.com/login",
+    runConfig: createRunConfig(),
+    providerMode: "heuristic",
+    goalFamily: "functional",
+    summary: "Queued."
+  });
+
+  sessionStore.patchSession(session.id, {
+    status: "login-assist",
+    authAssist: {
+      state: "awaiting_credentials",
+      code: "LOGIN_REQUIRED",
+      pageUrl: "https://example.com/login",
+      form: {
+        identifierFieldDetected: true,
+        passwordFieldDetected: true,
+        submitControlDetected: true,
+        visibleStep: "credentials"
+      },
+      runtime: {
+        identifierFilled: true,
+        passwordFilled: true,
+        submitTriggered: true,
+        submitControlType: "control-click",
+        postSubmitUrl: "https://example.com/login",
+        postSubmitProbeState: "credentials"
+      }
+    }
+  });
+
+  const stored = sessionStore.getSession(session.id);
+  assert.equal(stored.authAssist?.debug?.authPanelEligible, true);
+  assert.equal(stored.authAssist?.debug?.credentialsPending, true);
+  assert.equal(stored.authAssist?.debug?.otpPending, false);
+  assert.equal(stored.authAssist?.debug?.identifierFilled, true);
+  assert.equal(stored.authAssist?.debug?.passwordFilled, true);
+  assert.equal(stored.authAssist?.debug?.submitTriggered, true);
+  assert.equal(stored.authAssist?.debug?.submitControlType, "control-click");
+  assert.equal(stored.authAssist?.debug?.postSubmitProbeState, "credentials");
 });

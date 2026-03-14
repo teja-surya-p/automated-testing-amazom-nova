@@ -6,7 +6,7 @@ import {
   detectNonLoginUrlWithAuthMarkers
 } from "../loginAssistState.js";
 
-test("login assist blocks when headless", () => {
+test("login assist waits when headless so dashboard auth-assist can continue", () => {
   const result = decideLoginAssistTransition({
     enabled: true,
     headless: true,
@@ -14,8 +14,8 @@ test("login assist blocks when headless", () => {
     timeoutMs: 180000
   });
 
-  assert.equal(result.outcome, "BLOCKED");
-  assert.equal(result.code, "LOGIN_ASSIST_HEADLESS_UNSUPPORTED");
+  assert.equal(result.outcome, "WAIT");
+  assert.equal(result.code, "LOGIN_ASSIST_WAITING");
 });
 
 test("login assist resumes when authentication detected", () => {
@@ -70,4 +70,3 @@ test("auth marker detector requires non-login URL plus authenticated markers", (
   assert.equal(falsePositive, false);
   assert.equal(truePositive, true);
 });
-

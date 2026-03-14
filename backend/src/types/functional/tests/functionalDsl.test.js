@@ -246,3 +246,34 @@ test("core rules include phase-4 download/new-tab/upload/spa checks", () => {
   assert.equal(ruleIds.has("EXCESSIVE_THIRD_PARTY_FAILURES"), true);
   assert.equal(rules.some((rule) => rule.ruleId === "NO_API_5XX" && rule.pass === false), true);
 });
+
+test("core rules honor explicit allowedRuleIds filter", () => {
+  const before = makeSnapshot({
+    url: "https://example.com/store",
+    hash: "h1"
+  });
+  const after = makeSnapshot({
+    url: "https://example.com/products",
+    hash: "h2"
+  });
+  const filteredRules = evaluateCoreFunctionalRules({
+    beforeSnapshot: before,
+    afterSnapshot: after,
+    action: {
+      type: "click",
+      functionalKind: "navigation",
+      elementId: "el-nav"
+    },
+    runHistory: [{ url: before.url }, { url: after.url }],
+    assertionsConfig: {
+      failOnConsoleError: true,
+      failOn5xx: true
+    },
+    allowedRuleIds: new Set(["NAVIGATION_URL_CHANGED", "SAFE_REDIRECT_ALLOWED"])
+  });
+
+  assert.deepEqual(
+    filteredRules.map((rule) => rule.ruleId).sort((left, right) => left.localeCompare(right)),
+    ["NAVIGATION_URL_CHANGED", "SAFE_REDIRECT_ALLOWED"]
+  );
+});

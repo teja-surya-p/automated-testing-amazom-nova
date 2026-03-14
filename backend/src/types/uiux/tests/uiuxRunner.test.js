@@ -66,3 +66,46 @@ test("uiux runner returns normalized issue output with evidence refs and step", 
   assert.equal(typeof issue.explanation?.whyItFailed, "string");
   assert.equal(typeof issue.explanation?.whyItMatters, "string");
 });
+
+test("uiux runner honors active check filtering", () => {
+  const runner = new UiuxRunner();
+  const issues = runner.run({
+    snapshot: {
+      step: 3,
+      viewportLabel: "desktop",
+      url: "https://example.com/home",
+      bodyText: "Example page",
+      viewportWidth: 1280,
+      viewportHeight: 720,
+      pageWidth: 1280,
+      pageHeight: 1600,
+      primaryCta: null,
+      interactive: [],
+      images: [
+        {
+          selector: "img.hero",
+          src: "https://cdn.example.com/hero.png",
+          hadError: true,
+          broken: true,
+          areaRatio: 0.2
+        }
+      ],
+      formControls: [],
+      errorBanners: [],
+      overlays: [],
+      spinnerVisible: false,
+      uiReadyState: { timedOut: false, strategy: "hybrid" },
+      networkSummary: {
+        mainDocumentStatus: null,
+        mainDocumentUrl: null,
+        mainDocumentFailed: false
+      },
+      screenshotUrl: "/artifacts/run/frames/step-003.png",
+      artifacts: {}
+    },
+    stage: "navigation",
+    activeCheckIds: ["HORIZONTAL_SCROLL"]
+  });
+
+  assert.equal(issues.length, 0);
+});

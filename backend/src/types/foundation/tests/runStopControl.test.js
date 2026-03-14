@@ -108,3 +108,53 @@ test("cancelled run does not resume", async () => {
   assert.equal(resumed?.status, "cancelled");
   assert.equal(resumed?.authAssist?.resumeRequestedAt ?? null, null);
 });
+
+test("stopAllActiveSessions targets active sessions and returns structured counts", async () => {
+  const { orchestrator, sessionStore } = createOrchestrator();
+  const runConfig = createRunConfig();
+  const activeA = sessionStore.createSession({
+    goal: "Run A",
+    startUrl: "https://example.com/a",
+    runConfig,
+    providerMode: "mock"
+  });
+  const activeB = sessionStore.createSession({
+    goal: "Run B",
+    startUrl: "https://example.com/b",
+    runConfig,
+    providerMode: "mock"
+  });
+  const terminal = sessionStore.createSession({
+    goal: "Run C",
+    startUrl: "https://example.com/c",
+    runConfig,
+    providerMode: "mock"
+  });
+
+  sessionStore.patchSession(activeA.id, { status: "running" });
+  sessionStore.patchSession(activeB.id, { status: "login-assist" });
+  sessionStore.patchSession(terminal.id, { status: "passed" });
+
+  const requested = [];
+  orchestrator.stopSession = async (sessionId, { reason } = {}) => {
+    requested.push(sessionId);
+    return {
+      ok: true,
+      code: "SESSION_STOP_REQUESTED",
+      message: reason ?? "Run stop requested by user.",
+      session: {
+        id: sessionId,
+        status: "cancelling"
+      }
+    };
+  };
+
+  const result = await orchestrator.stopAllActiveSessions();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.activeFound, 2);
+  assert.equal(result.stoppedCount, 2);
+  assert.deepEqual(result.requestedSessionIds, [activeB.id, activeA.id]);
+  assert.deepEqual(requested, [activeB.id, activeA.id]);
+  assert.deepEqual(result.failed, []);
+});

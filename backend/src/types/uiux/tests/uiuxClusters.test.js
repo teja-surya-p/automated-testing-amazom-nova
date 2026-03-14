@@ -2,10 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildUiuxComponentFingerprint,
   buildUiuxGroupedCaseKey,
   buildUiuxClusterKey,
   buildUiuxIssueClusters,
   normalizePathFromUrl,
+  resolveUiuxIssueFamily,
   upsertUiuxIssueClusters
 } from "../../../library/reporting/clustering.js";
 
@@ -50,6 +52,85 @@ test("buildUiuxGroupedCaseKey collapses same issue across viewports/devices", ()
   });
 
   assert.equal(first, second);
+});
+
+test("buildUiuxGroupedCaseKey merges related issue types for same component family", () => {
+  const clipped = buildUiuxGroupedCaseKey({
+    issueType: "CLIPPED_PRIMARY_CTA",
+    affectedUrl: "https://example.com/pricing?viewport=mobile",
+    affectedSelector: "button.primary-cta",
+    highlight: {
+      box: { x: 24, y: 500, width: 170, height: 40 }
+    },
+    title: "Primary CTA clipped"
+  });
+  const overflow = buildUiuxGroupedCaseKey({
+    issueType: "TEXT_OVERFLOW_CLIP",
+    affectedUrl: "https://example.com/pricing",
+    affectedSelector: "button.primary-cta",
+    highlight: {
+      box: { x: 26, y: 498, width: 172, height: 40 }
+    },
+    title: "CTA text overflows"
+  });
+
+  assert.equal(clipped, overflow);
+});
+
+test("buildUiuxGroupedCaseKey separates same component family by breakpoint range", () => {
+  const mobileRange = buildUiuxGroupedCaseKey({
+    issueType: "TEXT_OVERFLOW_CLIP",
+    affectedUrl: "https://example.com/pricing",
+    affectedSelector: "button.primary-cta",
+    breakpointRange: {
+      minWidth: 320,
+      maxWidth: 430
+    }
+  });
+  const tabletRange = buildUiuxGroupedCaseKey({
+    issueType: "TEXT_OVERFLOW_CLIP",
+    affectedUrl: "https://example.com/pricing",
+    affectedSelector: "button.primary-cta",
+    breakpointRange: {
+      minWidth: 720,
+      maxWidth: 860
+    }
+  });
+
+  assert.notEqual(mobileRange, tabletRange);
+});
+
+test("buildUiuxGroupedCaseKey does not force cross-type merge when component fingerprint is weak", () => {
+  const first = buildUiuxGroupedCaseKey({
+    issueType: "CLIPPED_PRIMARY_CTA",
+    affectedUrl: "https://example.com/pricing",
+    summary: "CTA appears partially clipped."
+  });
+  const second = buildUiuxGroupedCaseKey({
+    issueType: "TEXT_OVERFLOW_CLIP",
+    affectedUrl: "https://example.com/pricing",
+    summary: "CTA text is clipped."
+  });
+
+  assert.notEqual(first, second);
+});
+
+test("buildUiuxComponentFingerprint preserves stable selector + region identity", () => {
+  const fingerprint = buildUiuxComponentFingerprint({
+    affectedSelector: "main .hero .cta:nth-child(2) > button.primary",
+    exactVisibleText: "Start free trial",
+    highlight: {
+      box: { x: 11, y: 231, width: 192, height: 42 }
+    }
+  });
+  assert.ok(fingerprint.key.includes("sel:main .hero .cta:nth-child(#)>button.primary"));
+  assert.ok(fingerprint.key.includes("lbl:start free trial"));
+  assert.equal(fingerprint.confidence, "strong");
+});
+
+test("resolveUiuxIssueFamily maps overlapping issue types deterministically", () => {
+  assert.equal(resolveUiuxIssueFamily("TEXT_OVERFLOW_CLIP"), "RESPONSIVE_OVERFLOW");
+  assert.equal(resolveUiuxIssueFamily("BROKEN_LINK"), "BROKEN_LINK");
 });
 
 test("upsertUiuxIssueClusters aggregates count/pages/worst severity", () => {

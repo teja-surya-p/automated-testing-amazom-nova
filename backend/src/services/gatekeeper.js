@@ -73,7 +73,16 @@ export class Gatekeeper {
     const combinedLabels = snapshot.semanticMap.map((item) => item.text.toLowerCase()).join(" ");
     const consoleErrors = (snapshot.consoleErrors ?? []).join(" ").toLowerCase();
     const failedRequests = snapshot.networkSummary?.failedRequests ?? 0;
+    const status4xx = snapshot.networkSummary?.status4xx ?? 0;
+    const status429 = snapshot.networkSummary?.status429 ?? 0;
     const status5xx = snapshot.networkSummary?.status5xx ?? 0;
+    const rateLikeFailureSignals = (snapshot.networkSummary?.lastFailures ?? []).reduce((count, failure) => {
+      const sample = `${failure?.status ?? ""} ${failure?.failureText ?? ""} ${failure?.url ?? ""}`;
+      if (includesPattern(sample, ["429", "rate limit", "too many requests"])) {
+        return count + 1;
+      }
+      return count;
+    }, 0);
 
     if (
       snapshot.overlays.length &&
@@ -108,7 +117,9 @@ export class Gatekeeper {
       blockers.push(buildBlocker("CAPTCHA_BOT_DETECTED", 0.99, "A bot challenge or captcha is visible."));
     }
 
-    if (includesPattern(`${body} ${combinedLabels}`, ["rate limit", "too many requests"]) || failedRequests >= 5) {
+    const explicitRateLimitSignal = includesPattern(`${body} ${combinedLabels}`, ["rate limit", "too many requests"]);
+    const severeRateLikeNetworkPattern = failedRequests >= 8 && (status4xx >= 3 || rateLikeFailureSignals >= 2);
+    if (explicitRateLimitSignal || status429 > 0 || rateLikeFailureSignals >= 2 || severeRateLikeNetworkPattern) {
       blockers.push(buildBlocker("RATE_LIMITED", 0.84, "The site appears to be rate limiting the session."));
     }
 

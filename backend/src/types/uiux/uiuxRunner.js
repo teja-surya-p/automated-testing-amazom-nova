@@ -1,4 +1,5 @@
 import { UiuxCheckRegistry } from "./checks/registry.js";
+import { buildSnapshotEvidenceRefs } from "../../library/common-tests/evidenceRefs.js";
 
 function issueKey(issue) {
   return [
@@ -20,33 +21,14 @@ export class UiuxRunner {
   }
 
   buildEvidenceRefs(snapshot) {
-    const refs = [
-      {
-        type: "screenshot",
-        ref: snapshot.screenshotUrl ?? snapshot.screenshotPath,
-        captureMode: snapshot.screenshotCaptureMode ?? "viewport",
-        viewport: {
-          width: snapshot.viewportWidth ?? null,
-          height: snapshot.viewportHeight ?? null
-        }
-      }
-    ];
-
-    const domArtifacts = snapshot.artifacts?.dom ?? [];
-    const a11yArtifacts = snapshot.artifacts?.a11y ?? [];
-    const latestDom = domArtifacts.at(-1);
-    const latestA11y = a11yArtifacts.at(-1);
-    if (latestDom?.url) {
-      refs.push({ type: "dom", ref: latestDom.url });
-    }
-    if (latestA11y?.url) {
-      refs.push({ type: "a11y", ref: latestA11y.url });
-    }
-
-    return refs;
+    return buildSnapshotEvidenceRefs(snapshot, {
+      includeCaptureMode: true,
+      defaultCaptureMode: "viewport",
+      includeViewport: true
+    });
   }
 
-  run({ snapshot, stage, actionResult = null, actionContext = null }) {
+  run({ snapshot, stage, actionResult = null, actionContext = null, activeCheckIds = null }) {
     const viewportLabel = snapshot.viewportLabel ?? "default";
     const runHistory = this.historyByViewport.get(viewportLabel) ?? [];
     const issues = this.registry.runAll({
@@ -54,6 +36,7 @@ export class UiuxRunner {
       stage,
       actionResult,
       actionContext,
+      activeCheckIds,
       evidenceRefs: this.buildEvidenceRefs(snapshot),
       runHistory
     });
